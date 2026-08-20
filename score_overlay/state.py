@@ -95,6 +95,7 @@ class ScoreState:
         self.round_open = True
         self.rounds: list[dict] = []
         self.checkpoint_teams: list[int] = []
+        self.champion_team: int | None = None
         self.teams = [
             TeamState(index, team_names[index - 1], TEAM_COLORS[index - 1]) for index in range(1, 9)
         ]
@@ -127,6 +128,7 @@ class ScoreState:
                 elif team.respawn_grace_seconds > 0:
                     team.respawn_grace_seconds = max(0.0, team.respawn_grace_seconds - sample_seconds)
                 changed |= self._update_status(team, now)
+            changed |= self._update_champion_locked()
 
             self.updated_at = now
             self.processing_ms = round(processing_ms, 2)
@@ -198,6 +200,7 @@ class ScoreState:
                 if seen.escaped is not None:
                     team.escaped = StableValue(seen.escaped)
                 self._update_status(team, time.time())
+            self._update_champion_locked()
             self.source = source
             self.revision += 1
             self.updated_at = time.time()
@@ -230,9 +233,12 @@ class ScoreState:
         with self._lock:
             if not self.round_open:
                 raise ValueError("진행 중인 라운드가 없습니다.")
+            winner_team = self._round_winner_locked()
+            self._update_champion_locked()
             result = {
                 "round": self.round_number,
                 "checkpointTeams": list(self.checkpoint_teams),
+                "winnerTeam": winner_team,
                 "teams": [
                     {
                         "team": team.team,
@@ -322,6 +328,8 @@ class ScoreState:
                 team.eliminated_at = saved.get("eliminatedAt")
                 team.escaped_at = saved.get("escapedAt")
                 team.respawn_grace_seconds = 0.0
+            self.champion_team = self._completed_champion_locked()
+            self._update_champion_locked()
             self.revision += 1
             self.updated_at = time.time()
             return deepcopy(restored)
@@ -375,10 +383,13 @@ class ScoreState:
             else:
                 if not self.tournament["checkpointEnabled"]:
                     self.checkpoint_teams = []
+                    self.champion_team = None
                 elif not checkpoint_was_enabled:
                     self.checkpoint_teams = self._checkpoint_teams_for_round_locked(
                         self.round_number
                     )
+                    self.champion_team = self._completed_champion_locked()
+                    self._update_champion_locked()
                 self.revision += 1
                 self.updated_at = time.time()
 
@@ -395,6 +406,7 @@ class ScoreState:
         self.round_open = True
         self.rounds = []
         self.checkpoint_teams = []
+        self.champion_team = None
         for team in self.teams:
             team.ts = StableValue(0.0)
             team.ks = StableValue(0.0)
@@ -428,12 +440,35 @@ class ScoreState:
         ranked = sorted(totals, key=lambda team: (-totals[team][0], -totals[team][1], team))
         return ranked[:count]
 
+    def _round_winner_locked(self) -> int | None:
+        remaining = [
+            team.team for team in self.teams if team.status not in TERMINAL_STATUSES
+        ]
+        return remaining[0] if len(remaining) == 1 else None
+
+    def _completed_champion_locked(self) -> int | None:
+        for completed in self.rounds:
+            winner = completed.get("winnerTeam")
+            if winner in completed.get("checkpointTeams", []):
+                return int(winner)
+        return None
+
+    def _update_champion_locked(self) -> bool:
+        if self.champion_team is not None or not self.tournament["checkpointEnabled"]:
+            return False
+        winner = self._round_winner_locked()
+        if winner not in self.checkpoint_teams:
+            return False
+        self.champion_team = winner
+        return True
+
     def snapshot(self) -> dict:
         with self._lock:
             rows = []
             ordered_teams = sorted(
                 self.teams,
                 key=lambda team: (
+                    team.team != self.champion_team,
                     -float(team.ts.value),
                     -float(team.ks.value),
                     team.status in TERMINAL_STATUSES,
@@ -460,6 +495,7 @@ class ScoreState:
                         "escaped": team.escaped.value,
                         "status": team.status,
                         "checkpoint": team.team in self.checkpoint_teams,
+                        "champion": team.team == self.champion_team,
                     }
                 )
             active_teams = sum(row["status"] not in TERMINAL_STATUSES for row in rows)
@@ -473,6 +509,7 @@ class ScoreState:
                 "roundOpen": self.round_open,
                 "completedRounds": deepcopy(self.rounds),
                 "checkpointTeams": list(self.checkpoint_teams),
+                "championTeam": self.champion_team,
                 "teams": rows,
                 "activeTeams": active_teams,
                 "alivePlayers": alive_players,
