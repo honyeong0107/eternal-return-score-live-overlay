@@ -15,3 +15,9 @@
 - 사용 파일: `BebasNeue-Regular.ttf`
 - SIL Open Font License 1.1
 - 라이선스 전문: [BebasNeue-OFL.txt](score_overlay/static/fonts/BebasNeue-OFL.txt)
+
+## PaddleOCR PP-OCRv5 Korean recognition model
+
+- 사용 파일: `korean_PP-OCRv5_rec_mobile.onnx`
+- 원본 프로젝트: <https://github.com/PaddlePaddle/PaddleOCR>
+- Apache License 2.0

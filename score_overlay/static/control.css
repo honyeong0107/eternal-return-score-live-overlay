@@ -47,7 +47,6 @@ code { max-width: 420px; overflow: hidden; text-overflow: ellipsis; padding: 8px
 .totals-panel h2 { margin-bottom: 12px; }
 .round-controls { display: flex; align-items: center; gap: 8px; }
 .round-controls select { width: 150px; min-height: 36px; padding-block: 6px; }
-.round-limit-field { width: min(240px, 100%); margin-bottom: 14px; }
 .round-score-header, .round-score-row { display: grid; grid-template-columns: minmax(140px, 1fr) repeat(3, 84px); align-items: center; gap: 8px; }
 .round-score-header, .total-score-header { padding: 6px 10px; color: var(--muted); font-size: .72rem; font-weight: 600; letter-spacing: .02em; }
 .round-score-row { min-height: 46px; padding: 5px 10px; border-top: 1px solid #e5e5e7; }
