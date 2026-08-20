@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/control.css">
+  <title>이터널 리턴 라이브 스코어</title>
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>이터널 리턴 라이브 스코어</h1>
+      <p id="connection">게임 화면을 확인하는 중…</p>
+    </div>
+    <div class="header-actions">
+      <span class="round-badge" id="round-current">1 / 9 라운드</span>
+      <button class="button primary" id="live-score">라이브 스코어 시작</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="capture-bar" aria-label="게임 화면 선택">
+      <strong>게임 화면</strong>
+      <select id="capture-window" aria-label="인식할 게임 창 선택">
+        <option value="monitor">창 찾는 중…</option>
+      </select>
+      <button class="button quiet" id="refresh-windows" type="button">새로고침</button>
+    </section>
+
+    <section class="preview-section" aria-labelledby="preview-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="preview-title">방송 화면 미리보기</h2>
+        </div>
+        <div class="url-row">
+          <span class="size-badge">800 × 600</span>
+          <code id="overlay-url"></code>
+          <button class="button quiet" id="copy-url">주소 복사</button>
+        </div>
+      </div>
+      <div class="preview-frame" id="preview-frame">
+        <iframe id="preview" src="/overlay?preview=1" title="실시간 점수판 미리보기"></iframe>
+      </div>
+    </section>
+
+    <div class="score-workspace">
+      <section class="rounds-panel" aria-labelledby="rounds-title">
+        <div class="section-heading compact">
+          <h2 id="rounds-title">라운드 점수</h2>
+          <div class="round-controls">
+            <select id="round-select" aria-label="라운드 선택" disabled>
+              <option>라운드 없음</option>
+            </select>
+            <button class="button primary" id="complete-round">1라운드 종료</button>
+            <button class="button quiet" id="undo-round" disabled>되돌리기</button>
+          </div>
+        </div>
+        <div id="round-editor"></div>
+      </section>
+      <aside class="totals-panel" aria-labelledby="totals-title">
+        <h2 id="totals-title">총점수</h2>
+        <div id="total-scores"></div>
+      </aside>
+    </div>
+
+    <div class="workspace">
+      <section class="settings" aria-labelledby="tournament-title">
+        <div class="section-heading compact">
+          <div>
+            <h2 id="tournament-title">대회 설정</h2>
+          </div>
+          <div class="settings-heading-actions">
+            <button class="button destructive" id="delete-tournament" type="button">대회 삭제</button>
+            <button class="button quiet" id="new-tournament" type="button">새 대회</button>
+          </div>
+        </div>
+
+        <label class="field full">
+          <span>저장된 대회</span>
+          <select id="tournament-select"></select>
+        </label>
+
+        <form id="tournament-form">
+          <div class="form-row">
+            <label class="field">
+              <span>대회 이름</span>
+              <input id="tournament-name" maxlength="50" required>
+            </label>
+            <label class="field">
+              <span>점수판 제목</span>
+              <input id="board-title" maxlength="30" required>
+            </label>
+          </div>
+          <label class="field round-limit-field">
+            <span>전체 라운드</span>
+            <select id="max-rounds" aria-label="전체 라운드 선택">
+              <option value="1">1라운드</option>
+              <option value="2">2라운드</option>
+              <option value="3">3라운드</option>
+              <option value="4">4라운드</option>
+              <option value="5">5라운드</option>
+              <option value="6">6라운드</option>
+              <option value="7">7라운드</option>
+              <option value="8">8라운드</option>
+              <option value="9">9라운드</option>
+            </select>
+          </label>
+          <fieldset class="theme-presets">
+            <legend>색상 템플릿</legend>
+            <div class="preset-options" id="preset-options" role="group" aria-label="점수판 색상 템플릿">
+              <button class="preset-option" type="button" data-theme-preset="pastel-pink" style="--preset-color:#f2a7c2"><span></span>파스텔 핑크</button>
+              <button class="preset-option" type="button" data-theme-preset="pastel-brown" style="--preset-color:#c8a98a"><span></span>파스텔 브라운</button>
+              <button class="preset-option" type="button" data-theme-preset="pastel-green" style="--preset-color:#a8d5ba"><span></span>파스텔 그린</button>
+              <button class="preset-option" type="button" data-theme-preset="pastel-blue" style="--preset-color:#a8d8f0"><span></span>파스텔 블루</button>
+              <button class="preset-option" type="button" data-theme-preset="pastel-red" style="--preset-color:#f2a0a0"><span></span>파스텔 레드</button>
+              <button class="preset-add" id="custom-theme" type="button" aria-expanded="false" aria-controls="theme-details" aria-label="세부 색상 열기" title="세부 색상">+</button>
+            </div>
+          </fieldset>
+
+          <section class="theme-details" id="theme-details" aria-label="세부 색상" hidden>
+            <div class="fixed-colors" aria-label="고정 색상"><span>배경 <b>#FFFFFF</b></span><span>윤곽선 <b>#000000</b></span></div>
+            <div class="form-row colors">
+              <label class="field color-field">
+                <span>포인트</span>
+                <input id="accent-color" type="color">
+              </label>
+              <label class="field color-field">
+                <span>텍스트</span>
+                <input id="text-color" type="color">
+              </label>
+              <label class="field color-field">
+                <span>보조 텍스트</span>
+                <input id="muted-color" type="color">
+              </label>
+              <label class="field color-field">
+                <span>KS</span>
+                <input id="ks-color" type="color">
+              </label>
+              <label class="field color-field">
+                <span>순위 박스</span>
+                <input id="rank-color" type="color">
+              </label>
+              <label class="field color-field">
+                <span>순위 숫자</span>
+                <input id="rank-text-color" type="color">
+              </label>
+              <label class="field color-field">
+                <span>전멸 효과</span>
+                <input id="elimination-color" type="color">
+              </label>
+            </div>
+          </section>
+
+          <fieldset>
+            <legend>팀 이름</legend>
+            <div class="team-fields" id="team-fields"></div>
+          </fieldset>
+
+          <div class="actions">
+            <button class="button primary" type="submit">대회 설정 저장</button>
+            <button class="button danger" id="reset" type="button">새 경기 초기화</button>
+          </div>
+        </form>
+      </section>
+
+      <aside class="status-panel" aria-labelledby="status-title">
+        <h2 id="status-title">인식 상태</h2>
+        <dl>
+          <div><dt>입력</dt><dd id="source-status">—</dd></div>
+          <div><dt>추적</dt><dd id="tracking-status">대기 중</dd></div>
+          <div><dt>해상도</dt><dd id="resolution-status">—</dd></div>
+          <div><dt>처리 속도</dt><dd id="speed-status">—</dd></div>
+          <div><dt>반영 횟수</dt><dd id="revision-status">—</dd></div>
+        </dl>
+        <details>
+          <summary>진단 정보 보기</summary>
+          <pre id="raw-state"></pre>
+        </details>
+      </aside>
+    </div>
+
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/control.js"></script>
+</body>
+</html>

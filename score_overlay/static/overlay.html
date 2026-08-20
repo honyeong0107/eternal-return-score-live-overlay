@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/overlay.css">
+  <title>Live Standings</title>
+</head>
+<body>
+  <div class="overlay-canvas" id="overlay-canvas">
+    <main class="board-shell" aria-label="실시간 팀 순위">
+      <div class="board">
+        <header>
+          <h1 id="board-title">LEADERBOARD</h1>
+        </header>
+        <div class="labels"><span></span><span>TEAM</span><span class="ks-label">KS</span><span class="ts-label">TS</span></div>
+        <section id="rows"></section>
+      </div>
+    </main>
+  </div>
+  <script>
+    const canvas = document.getElementById('overlay-canvas');
+    const rows = document.getElementById('rows');
+    const boardTitle = document.getElementById('board-title');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const rowByTeam = new Map();
+    const eliminationRoundByTeam = new Map();
+    const scoreFrames = new WeakMap();
+    const rankAnimations = new WeakMap();
+    let revision = -1;
+    let initialized = false;
+    let canvasScale = 1;
+
+    function fitCanvas() {
+      canvasScale = 1;
+      canvas.style.left = '0px';
+      canvas.style.top = '0px';
+      canvas.style.transform = 'none';
+    }
+
+    function makeRow(team) {
+      const row = document.createElement('article');
+      row.className = 'team-row';
+      row.dataset.team = String(team.team);
+      row.innerHTML = '<span class="rank"></span><span class="team"><strong></strong></span><span class="score ks"></span><span class="score ts"></span>';
+      rowByTeam.set(team.team, row);
+      return row;
+    }
+
+    function setScore(element, next, animate) {
+      const target = Number(next);
+      const previous = Number(element.dataset.value);
+      element.dataset.value = String(target);
+      if (!animate || !Number.isFinite(previous) || previous === target || reduceMotion.matches) {
+        element.textContent = target.toFixed(1);
+        return;
+      }
+
+      const oldFrame = scoreFrames.get(element);
+      if (oldFrame) cancelAnimationFrame(oldFrame);
+      const started = performance.now();
+      const duration = 240;
+      const tick = (now) => {
+        const progress = Math.min(1, (now - started) / duration);
+        const eased = 1 - Math.pow(1 - progress, 4);
+        element.textContent = (previous + (target - previous) * eased).toFixed(1);
+        if (progress < 1) scoreFrames.set(element, requestAnimationFrame(tick));
+        else scoreFrames.delete(element);
+      };
+      scoreFrames.set(element, requestAnimationFrame(tick));
+    }
+
+    function eliminationFillColor(hex) {
+      const source = hex.replace('#', '').match(/.{2}/g)?.map((value) => Number.parseInt(value, 16));
+      if (!source) return '#5b7481';
+      const luminance = (scale) => {
+        const [red, green, blue] = source.map((value) => value * scale / 255).map((value) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+        return .2126 * red + .7152 * green + .0722 * blue;
+      };
+      if (luminance(1) <= .16) return hex;
+      let lower = 0;
+      let upper = 1;
+      for (let index = 0; index < 12; index += 1) {
+        const middle = (lower + upper) / 2;
+        if (luminance(middle) > .16) upper = middle;
+        else lower = middle;
+      }
+      return `#${source.map((value) => Math.round(value * lower).toString(16).padStart(2, '0')).join('')}`;
+    }
+
+    function rankMotionFrames(distancePhysical) {
+      const frameCount = 30;
+      return Array.from({length: frameCount + 1}, (_, index) => {
+        const progress = index / frameCount;
+        const eased = progress < .5 ? 4 * progress ** 3 : 1 - ((-2 * progress + 2) ** 3) / 2;
+        const physical = Math.round(distancePhysical * (1 - eased));
+        return {
+          offset: progress,
+          transform: `translate3d(0, ${physical / canvasScale}px, 0)`,
+          easing: index < frameCount ? 'steps(1, end)' : 'linear',
+        };
+      });
+    }
+
+    function render(data) {
+      const theme = data.tournament?.theme;
+      if (theme) {
+        boardTitle.textContent = theme.title;
+        document.documentElement.style.setProperty('--frame', '#000000');
+        document.documentElement.style.setProperty('--accent', theme.accent);
+        document.documentElement.style.setProperty('--surface', theme.surface);
+        document.documentElement.style.setProperty('--ink', theme.text);
+        document.documentElement.style.setProperty('--muted', theme.muted);
+        document.documentElement.style.setProperty('--ks', theme.ks);
+        document.documentElement.style.setProperty('--rank', theme.rank);
+        document.documentElement.style.setProperty('--rank-text', theme.rankText);
+        document.documentElement.style.setProperty('--row-line', '#000000');
+        document.documentElement.style.setProperty('--elimination', eliminationFillColor(theme.elimination || '#86aabd'));
+        document.documentElement.style.setProperty('--elimination-text', '#ffffff');
+      }
+      const previousPositions = new Map();
+      rowByTeam.forEach((row, team) => previousPositions.set(team, row.getBoundingClientRect().top));
+      rowByTeam.forEach((row) => {
+        const animation = rankAnimations.get(row);
+        if (animation) animation.cancel();
+      });
+
+      data.teams.forEach((team, index) => {
+        const row = rowByTeam.get(team.team) || makeRow(team);
+        row.style.order = String(index);
+        const statusName = team.status.toLowerCase();
+        row.classList.toggle('active', statusName === 'active');
+        row.classList.toggle('eliminated', statusName === 'eliminated');
+        if (team.status === 'ELIMINATED') {
+          const round = Number(data.round) || 0;
+          const alreadyShown = eliminationRoundByTeam.get(team.team) === round;
+          if (!alreadyShown) {
+            row.classList.remove('elimination-flash');
+            void row.offsetWidth;
+            row.classList.add('elimination-flash');
+            const clearEliminationFlash = (event) => {
+              if (event.animationName !== 'elimination-wash') return;
+              row.classList.remove('elimination-flash');
+              row.removeEventListener('animationend', clearEliminationFlash);
+            };
+            row.addEventListener('animationend', clearEliminationFlash);
+          }
+          eliminationRoundByTeam.set(team.team, round);
+        }
+        row.querySelector('.rank').textContent = String(index + 1);
+        row.querySelector('.team strong').textContent = team.name;
+        setScore(row.querySelector('.ts'), team.ts, initialized);
+        setScore(row.querySelector('.ks'), team.ks, initialized);
+        if (!row.isConnected) rows.append(row);
+      });
+
+      if (initialized && !reduceMotion.matches) {
+        rowByTeam.forEach((row, team) => {
+          const previousTop = previousPositions.get(team);
+          if (previousTop === undefined) return;
+          const distancePhysical = previousTop - row.getBoundingClientRect().top;
+          if (Math.abs(distancePhysical) < 1) return;
+          row.style.willChange = 'transform';
+          const animation = row.animate(rankMotionFrames(distancePhysical), { duration: 500, easing: 'linear' });
+          rankAnimations.set(row, animation);
+          const cleanup = () => {
+            if (rankAnimations.get(row) !== animation) return;
+            rankAnimations.delete(row);
+            row.style.removeProperty('will-change');
+          };
+          animation.addEventListener('finish', cleanup, {once: true});
+          animation.addEventListener('cancel', cleanup, {once: true});
+        });
+      }
+      initialized = true;
+    }
+
+    async function update() {
+      try {
+        const response = await fetch('/api/state', {cache: 'no-store'});
+        const data = await response.json();
+        if (data.revision !== revision) { revision = data.revision; render(data); }
+      } catch (_) {}
+    }
+    fitCanvas();
+    update();
+    setInterval(update, 500);
+  </script>
+</body>
+</html>

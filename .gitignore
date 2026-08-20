@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.playwright-cli/
+debug-frame.jpg
+output/
+video-inspection*/
+.superloopy/
+_workspace/
+*.mp4
+config.json
