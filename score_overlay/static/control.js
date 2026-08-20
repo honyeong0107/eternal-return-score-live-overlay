@@ -13,6 +13,7 @@ const elements = {
   deleteTournament: document.getElementById('delete-tournament'),
   name: document.getElementById('tournament-name'),
   title: document.getElementById('board-title'),
+  checkpointEnabled: document.getElementById('checkpoint-enabled'),
   presetOptions: document.getElementById('preset-options'),
   customTheme: document.getElementById('custom-theme'),
   themeDetails: document.getElementById('theme-details'),
@@ -110,6 +111,7 @@ function fillProfile(profile) {
   elements.deleteTournament.disabled = !activeId;
   elements.name.value = profile?.name || '새 대회';
   elements.title.value = profile?.theme?.title || 'LEADERBOARD';
+  elements.checkpointEnabled.checked = Boolean(profile?.checkpointEnabled);
   setThemeValues({
     accent: profile?.theme?.accent || THEME_PRESETS['pastel-blue'].accent,
     text: profile?.theme?.text || THEME_PRESETS['pastel-blue'].text,
@@ -182,15 +184,14 @@ function renderRoundEditor(state) {
   form.className = `round-form${current ? ' current-round-form' : ''}`;
   const header = document.createElement('div');
   header.className = 'round-score-header';
-  header.innerHTML = current
-    ? '<span>팀</span><span>KS</span><span>TS</span>'
-    : '<span>팀</span><span>KS</span><span>TS</span><span>패널티</span>';
+  header.innerHTML = '<span>팀</span><span>KS</span><span>TS</span><span>패널티</span>';
   form.append(header);
 
   const scoreRows = current ? state.teams.map((team) => ({
     team: team.team,
     ts: team.roundTs,
     ks: team.roundKs,
+    penalty: team.roundPenalty,
   })) : completed.teams;
   scoreRows.forEach((team) => {
     const row = document.createElement('div');
@@ -204,13 +205,10 @@ function renderRoundEditor(state) {
     ts.dataset.score = 'ts';
     ks.dataset.team = String(team.team);
     ks.dataset.score = 'ks';
-    row.append(name, ks, ts);
-    if (!current) {
-      const penalty = scoreInput(team.penalty || 0, `${completed.round}라운드 ${names.get(team.team)} 패널티`);
-      penalty.dataset.team = String(team.team);
-      penalty.dataset.score = 'penalty';
-      row.append(penalty);
-    }
+    const penalty = scoreInput(team.penalty || 0, `${roundNumber}라운드 ${names.get(team.team)} 패널티`);
+    penalty.dataset.team = String(team.team);
+    penalty.dataset.score = 'penalty';
+    row.append(name, ks, ts, penalty);
     form.append(row);
   });
 
@@ -239,7 +237,12 @@ function renderRoundEditor(state) {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(current
-            ? {team: team.team, ts: Number(ts.value), ks: Number(ks.value)}
+            ? {
+              team: team.team,
+              ts: Number(ts.value),
+              ks: Number(ks.value),
+              penalty: Number(penalty.value),
+            }
             : {
               round: completed.round,
               team: team.team,
@@ -271,13 +274,11 @@ function renderRounds(state) {
   roundOpen = Boolean(state.roundOpen);
   elements.roundCurrent.textContent = `${state.round}라운드`;
   elements.completeRound.disabled = !roundOpen;
-  elements.undoRound.disabled = !state.completedRounds.length || (roundOpen && state.teams.some((team) => {
-    const carried = state.completedRounds.reduce((total, item) => {
-      const saved = item.teams.find((entry) => entry.team === team.team);
-      return total + Number(saved?.ts || 0) - Number(saved?.penalty || 0);
-    }, 0);
-    return Number(team.ts) !== carried;
-  }));
+  elements.undoRound.disabled = !state.completedRounds.length || (roundOpen && state.teams.some((team) => (
+    Number(team.roundTs) !== 0
+    || Number(team.roundKs) !== 0
+    || Number(team.roundPenalty) !== 0
+  )));
   elements.completeRound.textContent = `${state.round}라운드 종료`;
   elements.live.disabled = !roundOpen;
 
@@ -286,7 +287,12 @@ function renderRounds(state) {
     round: state.round,
     roundOpen: state.roundOpen,
     completed: state.completedRounds,
-    current: state.teams.map((team) => [team.team, team.roundKs, team.roundTs]),
+    current: state.teams.map((team) => [
+      team.team,
+      team.roundKs,
+      team.roundTs,
+      team.roundPenalty,
+    ]),
   });
   if (nextKey === roundsKey) return;
   const dirty = [...elements.roundEditor.querySelectorAll('input')]
@@ -333,6 +339,7 @@ function renderTotals(state) {
     row.className = 'total-score-row';
     const name = document.createElement('strong');
     name.textContent = team.name;
+    name.classList.toggle('checkpoint', Boolean(team.checkpoint));
     const ts = document.createElement('span');
     ts.textContent = Number(team.ts).toFixed(1);
     const ks = document.createElement('span');
@@ -515,6 +522,7 @@ elements.form.addEventListener('submit', async (event) => {
   const profile = {
     id: activeId,
     name: elements.name.value,
+    checkpointEnabled: elements.checkpointEnabled.checked,
     teams: teamInputs.map((input) => input.value),
     theme: {
       title: elements.title.value,

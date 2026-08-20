@@ -9,6 +9,8 @@ from .recognizer import HudObservation, TeamObservation
 
 
 TEAM_COLORS = ("#d9004d", "#ee7411", "#d8ad00", "#d6c5a4", "#ec6385", "#d900aa", "#bc3c5c", "#baff00")
+TERMINAL_STATUSES = {"ELIMINATED", "ESCAPE"}
+CHECKPOINT_COUNTS = {5: 2, 6: 3, 7: 5, 8: 7}
 
 
 @dataclass
@@ -46,13 +48,16 @@ class TeamState:
     ks: StableValue = field(default_factory=lambda: StableValue(0.0))
     round_ts: StableValue = field(default_factory=lambda: StableValue(0.0))
     round_ks: StableValue = field(default_factory=lambda: StableValue(0.0))
+    round_penalty: float = 0.0
     carried_ts: float = 0.0
     carried_ks: float = 0.0
     alive: StableValue = field(default_factory=lambda: StableValue(3))
     knocked: StableValue = field(default_factory=lambda: StableValue(0))
     respawning: StableValue = field(default_factory=lambda: StableValue(0))
+    escaped: StableValue = field(default_factory=lambda: StableValue(False))
     status: str = "ACTIVE"
     eliminated_at: float | None = None
+    escaped_at: float | None = None
     respawn_grace_seconds: float = 0.0
 
 
@@ -63,6 +68,7 @@ class ScoreState:
             tournament = {
                 "id": "default",
                 "name": "기본 대회",
+                "checkpointEnabled": False,
                 "teams": tournament,
                 "theme": {
                     "title": "LEADERBOARD",
@@ -81,12 +87,15 @@ class ScoreState:
         self.tournament = {
             "id": tournament["id"],
             "name": tournament["name"],
+            "checkpointEnabled": bool(tournament.get("checkpointEnabled", False)),
             "theme": deepcopy(tournament["theme"]),
         }
         self.day = StableValue(1)
         self.round_number = 1
         self.round_open = True
         self.rounds: list[dict] = []
+        self.checkpoint_teams: list[int] = []
+        self.champion_team: int | None = None
         self.teams = [
             TeamState(index, team_names[index - 1], TEAM_COLORS[index - 1]) for index in range(1, 9)
         ]
@@ -119,6 +128,7 @@ class ScoreState:
                 elif team.respawn_grace_seconds > 0:
                     team.respawn_grace_seconds = max(0.0, team.respawn_grace_seconds - sample_seconds)
                 changed |= self._update_status(team, now)
+            changed |= self._update_champion_locked()
 
             self.updated_at = now
             self.processing_ms = round(processing_ms, 2)
@@ -136,19 +146,26 @@ class ScoreState:
                 round_changed = team.round_ts.observe(seen.ts)
                 round_changed |= team.round_ks.observe(seen.ks)
                 if round_changed:
-                    team.ts = StableValue(team.carried_ts + float(team.round_ts.value))
+                    team.ts = StableValue(
+                        team.carried_ts + float(team.round_ts.value) - team.round_penalty
+                    )
                     team.ks = StableValue(team.carried_ks + float(team.round_ks.value))
                     changed = True
         changed |= team.alive.observe(seen.alive)
         changed |= team.knocked.observe(seen.knocked)
         changed |= team.respawning.observe(seen.respawning)
+        changed |= team.escaped.observe(seen.escaped)
         return changed
 
     def _update_status(self, team: TeamState, now: float) -> bool:
         old = team.status
         alive = int(team.alive.value)
         day = int(self.day.value)
-        if team.eliminated_at is not None:
+        if team.escaped_at is not None or bool(team.escaped.value):
+            team.status = "ESCAPE"
+            if team.escaped_at is None:
+                team.escaped_at = now
+        elif team.eliminated_at is not None:
             team.status = "ELIMINATED"
         elif alive > 0:
             team.status = "ACTIVE"
@@ -170,7 +187,7 @@ class ScoreState:
                     round_ks = max(float(team.round_ks.value), seen.ks)
                     team.round_ts = StableValue(round_ts)
                     team.round_ks = StableValue(round_ks)
-                    team.ts = StableValue(team.carried_ts + round_ts)
+                    team.ts = StableValue(team.carried_ts + round_ts - team.round_penalty)
                     team.ks = StableValue(team.carried_ks + round_ks)
                 if seen.alive is not None:
                     team.alive = StableValue(seen.alive)
@@ -180,23 +197,30 @@ class ScoreState:
                     team.respawning = StableValue(seen.respawning)
                     if seen.respawning > 0:
                         team.respawn_grace_seconds = 10.0
+                if seen.escaped is not None:
+                    team.escaped = StableValue(seen.escaped)
                 self._update_status(team, time.time())
+            self._update_champion_locked()
             self.source = source
             self.revision += 1
             self.updated_at = time.time()
 
-    def adjust_current_round(self, team_number: int, ts: float, ks: float) -> None:
+    def adjust_current_round(self, team_number: int, ts: float, ks: float, penalty: float) -> None:
         if not 1 <= team_number <= 8:
             raise ValueError("팀 번호가 올바르지 않습니다.")
-        if any(value < 0 or value > 999.5 or value * 2 != round(value * 2) for value in (ts, ks)):
-            raise ValueError("점수는 0.5 단위여야 합니다.")
+        if any(
+            value < 0 or value > 999.5 or value * 2 != round(value * 2)
+            for value in (ts, ks, penalty)
+        ):
+            raise ValueError("점수와 패널티는 0.5 단위여야 합니다.")
         with self._lock:
             if not self.round_open:
                 raise ValueError("진행 중인 라운드가 없습니다.")
             team = self.teams[team_number - 1]
             team.round_ts = StableValue(ts)
             team.round_ks = StableValue(ks)
-            team.ts = StableValue(team.carried_ts + ts)
+            team.round_penalty = penalty
+            team.ts = StableValue(team.carried_ts + ts - penalty)
             team.ks = StableValue(team.carried_ks + ks)
             self.revision += 1
             self.updated_at = time.time()
@@ -209,19 +233,25 @@ class ScoreState:
         with self._lock:
             if not self.round_open:
                 raise ValueError("진행 중인 라운드가 없습니다.")
+            winner_team = self._round_winner_locked()
+            self._update_champion_locked()
             result = {
                 "round": self.round_number,
+                "checkpointTeams": list(self.checkpoint_teams),
+                "winnerTeam": winner_team,
                 "teams": [
                     {
                         "team": team.team,
                         "ts": float(team.round_ts.value),
                         "ks": float(team.round_ks.value),
-                        "penalty": 0.0,
+                        "penalty": team.round_penalty,
                         "alive": int(team.alive.value),
                         "knocked": int(team.knocked.value),
                         "respawning": int(team.respawning.value),
+                        "escaped": bool(team.escaped.value),
                         "status": team.status,
                         "eliminatedAt": team.eliminated_at,
+                        "escapedAt": team.escaped_at,
                     }
                     for team in self.teams
                 ],
@@ -232,15 +262,19 @@ class ScoreState:
                 team.carried_ks = float(team.ks.value)
 
             self.round_number += 1
+            self.checkpoint_teams = self._checkpoint_teams_for_round_locked(self.round_number)
             self.day = StableValue(1)
             for team in self.teams:
                 team.round_ts = StableValue(0.0)
                 team.round_ks = StableValue(0.0)
+                team.round_penalty = 0.0
                 team.alive = StableValue(3)
                 team.knocked = StableValue(0)
                 team.respawning = StableValue(0)
+                team.escaped = StableValue(False)
                 team.status = "ACTIVE"
                 team.eliminated_at = None
+                team.escaped_at = None
                 team.respawn_grace_seconds = 0.0
             self.revision += 1
             self.updated_at = time.time()
@@ -251,12 +285,24 @@ class ScoreState:
             if not self.rounds:
                 raise ValueError("되돌릴 종료 라운드가 없습니다.")
             if self.round_open and any(
-                float(team.round_ts.value) != 0 or float(team.round_ks.value) != 0 for team in self.teams
+                float(team.round_ts.value) != 0
+                or float(team.round_ks.value) != 0
+                or team.round_penalty != 0
+                for team in self.teams
             ):
                 raise ValueError("현재 라운드 점수가 있어 이전 라운드 종료를 되돌릴 수 없습니다.")
 
             restored = self.rounds.pop()
             self.round_number = int(restored["round"])
+            restored_checkpoint_teams = restored.get("checkpointTeams")
+            if self.tournament["checkpointEnabled"]:
+                self.checkpoint_teams = (
+                    list(restored_checkpoint_teams)
+                    if restored_checkpoint_teams is not None
+                    else self._checkpoint_teams_for_round_locked(self.round_number)
+                )
+            else:
+                self.checkpoint_teams = []
             self.round_open = True
             self.day = StableValue(1)
             for team in self.teams:
@@ -271,14 +317,19 @@ class ScoreState:
                 team.carried_ks = carried_ks
                 team.round_ts = StableValue(float(saved["ts"]))
                 team.round_ks = StableValue(float(saved["ks"]))
-                team.ts = StableValue(carried_ts + float(saved["ts"]))
+                team.round_penalty = float(saved.get("penalty", 0.0))
+                team.ts = StableValue(carried_ts + float(saved["ts"]) - team.round_penalty)
                 team.ks = StableValue(carried_ks + float(saved["ks"]))
                 team.alive = StableValue(int(saved.get("alive", 3)))
                 team.knocked = StableValue(int(saved.get("knocked", 0)))
                 team.respawning = StableValue(int(saved.get("respawning", 0)))
+                team.escaped = StableValue(bool(saved.get("escaped", False)))
                 team.status = str(saved.get("status", "ACTIVE"))
                 team.eliminated_at = saved.get("eliminatedAt")
+                team.escaped_at = saved.get("escapedAt")
                 team.respawn_grace_seconds = 0.0
+            self.champion_team = self._completed_champion_locked()
+            self._update_champion_locked()
             self.revision += 1
             self.updated_at = time.time()
             return deepcopy(restored)
@@ -318,9 +369,11 @@ class ScoreState:
 
     def set_tournament(self, tournament: dict, reset: bool = True) -> None:
         with self._lock:
+            checkpoint_was_enabled = self.tournament["checkpointEnabled"]
             self.tournament = {
                 "id": tournament["id"],
                 "name": tournament["name"],
+                "checkpointEnabled": bool(tournament.get("checkpointEnabled", False)),
                 "theme": deepcopy(tournament["theme"]),
             }
             for index, name in enumerate(tournament["teams"]):
@@ -328,6 +381,15 @@ class ScoreState:
             if reset:
                 self._reset_locked()
             else:
+                if not self.tournament["checkpointEnabled"]:
+                    self.checkpoint_teams = []
+                    self.champion_team = None
+                elif not checkpoint_was_enabled:
+                    self.checkpoint_teams = self._checkpoint_teams_for_round_locked(
+                        self.round_number
+                    )
+                    self.champion_team = self._completed_champion_locked()
+                    self._update_champion_locked()
                 self.revision += 1
                 self.updated_at = time.time()
 
@@ -343,21 +405,62 @@ class ScoreState:
         self.round_number = 1
         self.round_open = True
         self.rounds = []
+        self.checkpoint_teams = []
+        self.champion_team = None
         for team in self.teams:
             team.ts = StableValue(0.0)
             team.ks = StableValue(0.0)
             team.round_ts = StableValue(0.0)
             team.round_ks = StableValue(0.0)
+            team.round_penalty = 0.0
             team.carried_ts = 0.0
             team.carried_ks = 0.0
             team.alive = StableValue(3)
             team.knocked = StableValue(0)
             team.respawning = StableValue(0)
+            team.escaped = StableValue(False)
             team.status = "ACTIVE"
             team.eliminated_at = None
+            team.escaped_at = None
             team.respawn_grace_seconds = 0.0
         self.revision += 1
         self.updated_at = time.time()
+
+    def _checkpoint_teams_for_round_locked(self, round_number: int) -> list[int]:
+        if not self.tournament["checkpointEnabled"] or round_number < 5:
+            return []
+        count = 8 if round_number >= 9 else CHECKPOINT_COUNTS.get(round_number, 0)
+        totals = {team.team: [0.0, 0.0] for team in self.teams}
+        for completed in self.rounds:
+            for saved in completed["teams"]:
+                totals[int(saved["team"])][0] += float(saved["ts"]) - float(
+                    saved.get("penalty", 0.0)
+                )
+                totals[int(saved["team"])][1] += float(saved["ks"])
+        ranked = sorted(totals, key=lambda team: (-totals[team][0], -totals[team][1], team))
+        return ranked[:count]
+
+    def _round_winner_locked(self) -> int | None:
+        remaining = [
+            team.team for team in self.teams if team.status not in TERMINAL_STATUSES
+        ]
+        return remaining[0] if len(remaining) == 1 else None
+
+    def _completed_champion_locked(self) -> int | None:
+        for completed in self.rounds:
+            winner = completed.get("winnerTeam")
+            if winner in completed.get("checkpointTeams", []):
+                return int(winner)
+        return None
+
+    def _update_champion_locked(self) -> bool:
+        if self.champion_team is not None or not self.tournament["checkpointEnabled"]:
+            return False
+        winner = self._round_winner_locked()
+        if winner not in self.checkpoint_teams:
+            return False
+        self.champion_team = winner
+        return True
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -365,10 +468,13 @@ class ScoreState:
             ordered_teams = sorted(
                 self.teams,
                 key=lambda team: (
+                    team.team != self.champion_team,
                     -float(team.ts.value),
                     -float(team.ks.value),
-                    team.status == "ELIMINATED",
-                    -float(team.eliminated_at or 0.0) if team.status == "ELIMINATED" else 0.0,
+                    team.status in TERMINAL_STATUSES,
+                    -float(team.escaped_at or team.eliminated_at or 0.0)
+                    if team.status in TERMINAL_STATUSES
+                    else 0.0,
                     team.team,
                 ),
             )
@@ -382,20 +488,28 @@ class ScoreState:
                         "ks": team.ks.value,
                         "roundTs": team.round_ts.value,
                         "roundKs": team.round_ks.value,
+                        "roundPenalty": team.round_penalty,
                         "alive": team.alive.value,
                         "knocked": team.knocked.value,
                         "respawning": team.respawning.value,
+                        "escaped": team.escaped.value,
                         "status": team.status,
+                        "checkpoint": team.team in self.checkpoint_teams,
+                        "champion": team.team == self.champion_team,
                     }
                 )
-            active_teams = sum(row["status"] != "ELIMINATED" for row in rows)
-            alive_players = sum(int(row["alive"]) for row in rows if row["status"] != "ELIMINATED")
+            active_teams = sum(row["status"] not in TERMINAL_STATUSES for row in rows)
+            alive_players = sum(
+                int(row["alive"]) for row in rows if row["status"] not in TERMINAL_STATUSES
+            )
             return {
                 "tournament": deepcopy(self.tournament),
                 "day": self.day.value,
                 "round": self.round_number,
                 "roundOpen": self.round_open,
                 "completedRounds": deepcopy(self.rounds),
+                "checkpointTeams": list(self.checkpoint_teams),
+                "championTeam": self.champion_team,
                 "teams": rows,
                 "activeTeams": active_teams,
                 "alivePlayers": alive_players,

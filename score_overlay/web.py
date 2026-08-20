@@ -137,6 +137,7 @@ class OverlayHandler(BaseHTTPRequestHandler):
                     int(payload.get("team", 0)),
                     float(payload.get("ts", -1)),
                     float(payload.get("ks", -1)),
+                    float(payload.get("penalty", 0)),
                 )
                 self._json({"ok": True, "state": self.server.state.snapshot()})
                 return
