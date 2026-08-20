@@ -9,6 +9,7 @@ from .recognizer import HudObservation, TeamObservation
 
 
 TEAM_COLORS = ("#d9004d", "#ee7411", "#d8ad00", "#d6c5a4", "#ec6385", "#d900aa", "#bc3c5c", "#baff00")
+TERMINAL_STATUSES = {"ELIMINATED", "ESCAPE"}
 
 
 @dataclass
@@ -52,8 +53,10 @@ class TeamState:
     alive: StableValue = field(default_factory=lambda: StableValue(3))
     knocked: StableValue = field(default_factory=lambda: StableValue(0))
     respawning: StableValue = field(default_factory=lambda: StableValue(0))
+    escaped: StableValue = field(default_factory=lambda: StableValue(False))
     status: str = "ACTIVE"
     eliminated_at: float | None = None
+    escaped_at: float | None = None
     respawn_grace_seconds: float = 0.0
 
 
@@ -145,13 +148,18 @@ class ScoreState:
         changed |= team.alive.observe(seen.alive)
         changed |= team.knocked.observe(seen.knocked)
         changed |= team.respawning.observe(seen.respawning)
+        changed |= team.escaped.observe(seen.escaped)
         return changed
 
     def _update_status(self, team: TeamState, now: float) -> bool:
         old = team.status
         alive = int(team.alive.value)
         day = int(self.day.value)
-        if team.eliminated_at is not None:
+        if team.escaped_at is not None or bool(team.escaped.value):
+            team.status = "ESCAPE"
+            if team.escaped_at is None:
+                team.escaped_at = now
+        elif team.eliminated_at is not None:
             team.status = "ELIMINATED"
         elif alive > 0:
             team.status = "ACTIVE"
@@ -183,6 +191,8 @@ class ScoreState:
                     team.respawning = StableValue(seen.respawning)
                     if seen.respawning > 0:
                         team.respawn_grace_seconds = 10.0
+                if seen.escaped is not None:
+                    team.escaped = StableValue(seen.escaped)
                 self._update_status(team, time.time())
             self.source = source
             self.revision += 1
@@ -227,8 +237,10 @@ class ScoreState:
                         "alive": int(team.alive.value),
                         "knocked": int(team.knocked.value),
                         "respawning": int(team.respawning.value),
+                        "escaped": bool(team.escaped.value),
                         "status": team.status,
                         "eliminatedAt": team.eliminated_at,
+                        "escapedAt": team.escaped_at,
                     }
                     for team in self.teams
                 ],
@@ -247,8 +259,10 @@ class ScoreState:
                 team.alive = StableValue(3)
                 team.knocked = StableValue(0)
                 team.respawning = StableValue(0)
+                team.escaped = StableValue(False)
                 team.status = "ACTIVE"
                 team.eliminated_at = None
+                team.escaped_at = None
                 team.respawn_grace_seconds = 0.0
             self.revision += 1
             self.updated_at = time.time()
@@ -288,8 +302,10 @@ class ScoreState:
                 team.alive = StableValue(int(saved.get("alive", 3)))
                 team.knocked = StableValue(int(saved.get("knocked", 0)))
                 team.respawning = StableValue(int(saved.get("respawning", 0)))
+                team.escaped = StableValue(bool(saved.get("escaped", False)))
                 team.status = str(saved.get("status", "ACTIVE"))
                 team.eliminated_at = saved.get("eliminatedAt")
+                team.escaped_at = saved.get("escapedAt")
                 team.respawn_grace_seconds = 0.0
             self.revision += 1
             self.updated_at = time.time()
@@ -366,8 +382,10 @@ class ScoreState:
             team.alive = StableValue(3)
             team.knocked = StableValue(0)
             team.respawning = StableValue(0)
+            team.escaped = StableValue(False)
             team.status = "ACTIVE"
             team.eliminated_at = None
+            team.escaped_at = None
             team.respawn_grace_seconds = 0.0
         self.revision += 1
         self.updated_at = time.time()
@@ -380,8 +398,10 @@ class ScoreState:
                 key=lambda team: (
                     -float(team.ts.value),
                     -float(team.ks.value),
-                    team.status == "ELIMINATED",
-                    -float(team.eliminated_at or 0.0) if team.status == "ELIMINATED" else 0.0,
+                    team.status in TERMINAL_STATUSES,
+                    -float(team.escaped_at or team.eliminated_at or 0.0)
+                    if team.status in TERMINAL_STATUSES
+                    else 0.0,
                     team.team,
                 ),
             )
@@ -399,11 +419,14 @@ class ScoreState:
                         "alive": team.alive.value,
                         "knocked": team.knocked.value,
                         "respawning": team.respawning.value,
+                        "escaped": team.escaped.value,
                         "status": team.status,
                     }
                 )
-            active_teams = sum(row["status"] != "ELIMINATED" for row in rows)
-            alive_players = sum(int(row["alive"]) for row in rows if row["status"] != "ELIMINATED")
+            active_teams = sum(row["status"] not in TERMINAL_STATUSES for row in rows)
+            alive_players = sum(
+                int(row["alive"]) for row in rows if row["status"] not in TERMINAL_STATUSES
+            )
             return {
                 "tournament": deepcopy(self.tournament),
                 "day": self.day.value,

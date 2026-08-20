@@ -89,7 +89,7 @@ h1 { margin: 0 0 1px; font-size: var(--title-font-size); line-height: 1; font-we
 .team-row.eliminated .score, .team-row.eliminated .score.ks { color: #6e6f70; }
 .team-row.elimination-flash::before, .team-row.elimination-flash::after { position: absolute; inset: 0; pointer-events: none; }
 .team-row.elimination-flash::before { z-index: 2; content: ""; background: var(--elimination); animation: elimination-wash 1.5s linear both; }
-.team-row.elimination-flash::after { z-index: 3; content: "ELIMINATED"; display: grid; place-items: center; color: var(--elimination-text); font-family: "BebasNeue", sans-serif; font-size: 19px; line-height: 1; font-weight: 400; letter-spacing: .08em; transform: translateY(var(--elimination-text-nudge)); animation: elimination-label 1.5s linear both; }
+.team-row.elimination-flash::after { z-index: 3; content: attr(data-terminal-label); display: grid; place-items: center; color: var(--elimination-text); font-family: "BebasNeue", sans-serif; font-size: 19px; line-height: 1; font-weight: 400; letter-spacing: .08em; transform: translateY(var(--elimination-text-nudge)); animation: elimination-label 1.5s linear both; }
 @keyframes elimination-wash {
   0% { transform: scaleX(0); transform-origin: left center; animation-timing-function: cubic-bezier(.215, .61, .355, 1); }
   20% { transform: scaleX(1); transform-origin: left center; }

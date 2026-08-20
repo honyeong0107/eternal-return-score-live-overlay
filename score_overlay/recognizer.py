@@ -54,6 +54,7 @@ class TeamObservation:
     knocked: Optional[int]
     respawning: Optional[int]
     selected: bool = False
+    escaped: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -109,10 +110,17 @@ class HudRecognizer:
         skulls = 0
         knocked = 0
         respawning = 0
+        escaped = False
         for center_x in (31, 88, 145):
             timer_visible = self._has_respawn_timer(frame, line, x0, center_x)
             patch = frame[glyph_y + 37 : glyph_y + 76, x0 + center_x - 14 : x0 + center_x + 15]
             hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+            escape_green = (
+                (hsv[:, :, 0] >= 48)
+                & (hsv[:, :, 0] <= 65)
+                & (hsv[:, :, 1] > 120)
+                & (hsv[:, :, 2] > 140)
+            )
             magenta = (
                 (hsv[:, :, 0] >= 155)
                 & (hsv[:, :, 0] <= 179)
@@ -125,6 +133,8 @@ class HudRecognizer:
                 & (hsv[:, :, 1] > 135)
                 & (hsv[:, :, 2] > 135)
             )
+            if int(escape_green.sum()) >= 120:
+                escaped = True
             if timer_visible:
                 skulls += 1
                 respawning += 1
@@ -141,6 +151,7 @@ class HudRecognizer:
             knocked,
             respawning,
             selected=line == SCORE_LINES[0],
+            escaped=escaped,
         )
 
     @staticmethod

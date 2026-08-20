@@ -152,9 +152,11 @@
         const row = rowByTeam.get(team.team) || makeRow(team);
         row.style.order = String(index);
         const statusName = team.status.toLowerCase();
+        const terminal = team.status === 'ELIMINATED' || team.status === 'ESCAPE';
         row.classList.toggle('active', statusName === 'active');
-        row.classList.toggle('eliminated', statusName === 'eliminated');
-        if (team.status === 'ELIMINATED') {
+        row.classList.toggle('eliminated', terminal);
+        row.dataset.terminalLabel = team.status === 'ESCAPE' ? 'ESCAPE' : 'ELIMINATED';
+        if (terminal) {
           const wasEliminated = eliminatedTeams.has(team.team);
           if (initialized && !wasEliminated) pendingEliminations.add(team.team);
           eliminatedTeams.add(team.team);
