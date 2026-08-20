@@ -33,6 +33,7 @@ DEFAULT_THEME = {
 DEFAULT_PROFILE = {
     "id": "default",
     "name": "기본 대회",
+    "checkpointEnabled": False,
     "teams": DEFAULT_TEAMS,
     "theme": DEFAULT_THEME,
 }
@@ -112,6 +113,7 @@ class TournamentStore:
         return {
             "id": profile_id,
             "name": name,
+            "checkpointEnabled": bool(profile.get("checkpointEnabled", False)),
             "teams": clean_teams,
             "theme": {"title": title, **colors},
         }

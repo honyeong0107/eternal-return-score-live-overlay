@@ -10,6 +10,7 @@ from .recognizer import HudObservation, TeamObservation
 
 TEAM_COLORS = ("#d9004d", "#ee7411", "#d8ad00", "#d6c5a4", "#ec6385", "#d900aa", "#bc3c5c", "#baff00")
 TERMINAL_STATUSES = {"ELIMINATED", "ESCAPE"}
+CHECKPOINT_COUNTS = {5: 2, 6: 3, 7: 5, 8: 7}
 
 
 @dataclass
@@ -67,6 +68,7 @@ class ScoreState:
             tournament = {
                 "id": "default",
                 "name": "기본 대회",
+                "checkpointEnabled": False,
                 "teams": tournament,
                 "theme": {
                     "title": "LEADERBOARD",
@@ -85,12 +87,14 @@ class ScoreState:
         self.tournament = {
             "id": tournament["id"],
             "name": tournament["name"],
+            "checkpointEnabled": bool(tournament.get("checkpointEnabled", False)),
             "theme": deepcopy(tournament["theme"]),
         }
         self.day = StableValue(1)
         self.round_number = 1
         self.round_open = True
         self.rounds: list[dict] = []
+        self.checkpoint_teams: list[int] = []
         self.teams = [
             TeamState(index, team_names[index - 1], TEAM_COLORS[index - 1]) for index in range(1, 9)
         ]
@@ -228,6 +232,7 @@ class ScoreState:
                 raise ValueError("진행 중인 라운드가 없습니다.")
             result = {
                 "round": self.round_number,
+                "checkpointTeams": list(self.checkpoint_teams),
                 "teams": [
                     {
                         "team": team.team,
@@ -251,6 +256,7 @@ class ScoreState:
                 team.carried_ks = float(team.ks.value)
 
             self.round_number += 1
+            self.checkpoint_teams = self._checkpoint_teams_for_round_locked(self.round_number)
             self.day = StableValue(1)
             for team in self.teams:
                 team.round_ts = StableValue(0.0)
@@ -282,6 +288,15 @@ class ScoreState:
 
             restored = self.rounds.pop()
             self.round_number = int(restored["round"])
+            restored_checkpoint_teams = restored.get("checkpointTeams")
+            if self.tournament["checkpointEnabled"]:
+                self.checkpoint_teams = (
+                    list(restored_checkpoint_teams)
+                    if restored_checkpoint_teams is not None
+                    else self._checkpoint_teams_for_round_locked(self.round_number)
+                )
+            else:
+                self.checkpoint_teams = []
             self.round_open = True
             self.day = StableValue(1)
             for team in self.teams:
@@ -346,9 +361,11 @@ class ScoreState:
 
     def set_tournament(self, tournament: dict, reset: bool = True) -> None:
         with self._lock:
+            checkpoint_was_enabled = self.tournament["checkpointEnabled"]
             self.tournament = {
                 "id": tournament["id"],
                 "name": tournament["name"],
+                "checkpointEnabled": bool(tournament.get("checkpointEnabled", False)),
                 "theme": deepcopy(tournament["theme"]),
             }
             for index, name in enumerate(tournament["teams"]):
@@ -356,6 +373,12 @@ class ScoreState:
             if reset:
                 self._reset_locked()
             else:
+                if not self.tournament["checkpointEnabled"]:
+                    self.checkpoint_teams = []
+                elif not checkpoint_was_enabled:
+                    self.checkpoint_teams = self._checkpoint_teams_for_round_locked(
+                        self.round_number
+                    )
                 self.revision += 1
                 self.updated_at = time.time()
 
@@ -371,6 +394,7 @@ class ScoreState:
         self.round_number = 1
         self.round_open = True
         self.rounds = []
+        self.checkpoint_teams = []
         for team in self.teams:
             team.ts = StableValue(0.0)
             team.ks = StableValue(0.0)
@@ -389,6 +413,20 @@ class ScoreState:
             team.respawn_grace_seconds = 0.0
         self.revision += 1
         self.updated_at = time.time()
+
+    def _checkpoint_teams_for_round_locked(self, round_number: int) -> list[int]:
+        if not self.tournament["checkpointEnabled"] or round_number < 5:
+            return []
+        count = 8 if round_number >= 9 else CHECKPOINT_COUNTS.get(round_number, 0)
+        totals = {team.team: [0.0, 0.0] for team in self.teams}
+        for completed in self.rounds:
+            for saved in completed["teams"]:
+                totals[int(saved["team"])][0] += float(saved["ts"]) - float(
+                    saved.get("penalty", 0.0)
+                )
+                totals[int(saved["team"])][1] += float(saved["ks"])
+        ranked = sorted(totals, key=lambda team: (-totals[team][0], -totals[team][1], team))
+        return ranked[:count]
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -421,6 +459,7 @@ class ScoreState:
                         "respawning": team.respawning.value,
                         "escaped": team.escaped.value,
                         "status": team.status,
+                        "checkpoint": team.team in self.checkpoint_teams,
                     }
                 )
             active_teams = sum(row["status"] not in TERMINAL_STATUSES for row in rows)
@@ -433,6 +472,7 @@ class ScoreState:
                 "round": self.round_number,
                 "roundOpen": self.round_open,
                 "completedRounds": deepcopy(self.rounds),
+                "checkpointTeams": list(self.checkpoint_teams),
                 "teams": rows,
                 "activeTeams": active_teams,
                 "alivePlayers": alive_players,

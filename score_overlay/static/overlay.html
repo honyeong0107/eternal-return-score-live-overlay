@@ -46,7 +46,7 @@
       const row = document.createElement('article');
       row.className = 'team-row';
       row.dataset.team = String(team.team);
-      row.innerHTML = '<span class="rank"></span><span class="team"><strong></strong></span><span class="score ks"></span><span class="score ts"></span>';
+      row.innerHTML = '<span class="rank"></span><span class="team"><strong></strong><span class="checkpoint-badge">CP</span></span><span class="score ks"></span><span class="score ts"></span>';
       rowByTeam.set(team.team, row);
       return row;
     }
@@ -154,6 +154,7 @@
         const statusName = team.status.toLowerCase();
         const terminal = team.status === 'ELIMINATED' || team.status === 'ESCAPE';
         row.classList.toggle('active', statusName === 'active');
+        row.classList.toggle('checkpoint', Boolean(team.checkpoint));
         row.classList.toggle('eliminated', terminal);
         row.dataset.terminalLabel = team.status === 'ESCAPE' ? 'ESCAPE' : 'ELIMINATED';
         if (terminal) {

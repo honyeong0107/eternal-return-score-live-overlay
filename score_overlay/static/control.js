@@ -13,6 +13,7 @@ const elements = {
   deleteTournament: document.getElementById('delete-tournament'),
   name: document.getElementById('tournament-name'),
   title: document.getElementById('board-title'),
+  checkpointEnabled: document.getElementById('checkpoint-enabled'),
   presetOptions: document.getElementById('preset-options'),
   customTheme: document.getElementById('custom-theme'),
   themeDetails: document.getElementById('theme-details'),
@@ -110,6 +111,7 @@ function fillProfile(profile) {
   elements.deleteTournament.disabled = !activeId;
   elements.name.value = profile?.name || '새 대회';
   elements.title.value = profile?.theme?.title || 'LEADERBOARD';
+  elements.checkpointEnabled.checked = Boolean(profile?.checkpointEnabled);
   setThemeValues({
     accent: profile?.theme?.accent || THEME_PRESETS['pastel-blue'].accent,
     text: profile?.theme?.text || THEME_PRESETS['pastel-blue'].text,
@@ -337,6 +339,7 @@ function renderTotals(state) {
     row.className = 'total-score-row';
     const name = document.createElement('strong');
     name.textContent = team.name;
+    name.classList.toggle('checkpoint', Boolean(team.checkpoint));
     const ts = document.createElement('span');
     ts.textContent = Number(team.ts).toFixed(1);
     const ks = document.createElement('span');
@@ -519,6 +522,7 @@ elements.form.addEventListener('submit', async (event) => {
   const profile = {
     id: activeId,
     name: elements.name.value,
+    checkpointEnabled: elements.checkpointEnabled.checked,
     teams: teamInputs.map((input) => input.value),
     theme: {
       title: elements.title.value,
