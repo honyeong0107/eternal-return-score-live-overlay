@@ -1,0 +1,5 @@
+numpy>=2.0,<3
+opencv-python-headless>=4.10,<5
+mss>=10,<11
+windows-capture>=2.0,<3
+rapidocr-onnxruntime>=1.2,<2
