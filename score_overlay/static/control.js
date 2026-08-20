@@ -13,7 +13,6 @@ const elements = {
   deleteTournament: document.getElementById('delete-tournament'),
   name: document.getElementById('tournament-name'),
   title: document.getElementById('board-title'),
-  maxRounds: document.getElementById('max-rounds'),
   presetOptions: document.getElementById('preset-options'),
   customTheme: document.getElementById('custom-theme'),
   themeDetails: document.getElementById('theme-details'),
@@ -108,10 +107,9 @@ function updatePresetSelection() {
 
 function fillProfile(profile) {
   activeId = profile?.id || '';
-  elements.deleteTournament.disabled = !activeId || tournaments.length <= 1;
+  elements.deleteTournament.disabled = !activeId;
   elements.name.value = profile?.name || '새 대회';
   elements.title.value = profile?.theme?.title || 'LEADERBOARD';
-  elements.maxRounds.value = String(profile?.maxRounds || 9);
   setThemeValues({
     accent: profile?.theme?.accent || THEME_PRESETS['pastel-blue'].accent,
     text: profile?.theme?.text || THEME_PRESETS['pastel-blue'].text,
@@ -267,10 +265,11 @@ function renderRoundEditor(state) {
 }
 
 function renderRounds(state) {
+  const previousTournamentId = lastState?.tournament?.id;
+  const tournamentChanged = previousTournamentId !== state.tournament.id;
   lastState = state;
   roundOpen = Boolean(state.roundOpen);
-  const maxRounds = Number(state.tournament.maxRounds || 9);
-  elements.roundCurrent.textContent = `${state.round} / ${maxRounds} 라운드`;
+  elements.roundCurrent.textContent = `${state.round}라운드`;
   elements.completeRound.disabled = !roundOpen;
   elements.undoRound.disabled = !state.completedRounds.length || (roundOpen && state.teams.some((team) => {
     const carried = state.completedRounds.reduce((total, item) => {
@@ -279,10 +278,11 @@ function renderRounds(state) {
     }, 0);
     return Number(team.ts) !== carried;
   }));
-  elements.completeRound.textContent = roundOpen ? `${state.round}라운드 종료` : `${maxRounds}라운드 종료됨`;
+  elements.completeRound.textContent = `${state.round}라운드 종료`;
   elements.live.disabled = !roundOpen;
 
   const nextKey = JSON.stringify({
+    tournament: state.tournament.id,
     round: state.round,
     roundOpen: state.roundOpen,
     completed: state.completedRounds,
@@ -291,7 +291,7 @@ function renderRounds(state) {
   if (nextKey === roundsKey) return;
   const dirty = [...elements.roundEditor.querySelectorAll('input')]
     .some((input) => input.value !== input.dataset.original);
-  if (dirty) return;
+  if (dirty && !tournamentChanged) return;
   const previous = elements.roundSelect.value;
   roundsKey = nextKey;
   const options = [];
@@ -460,6 +460,7 @@ elements.select.addEventListener('change', async () => {
       body: JSON.stringify({id: elements.select.value}),
     });
     fillProfile(result.profile);
+    await loadState();
     notify(`${result.profile.name} 점수판으로 전환했습니다.`);
   } catch (error) {
     notify(error.message, true);
@@ -488,7 +489,7 @@ elements.deleteTournament.addEventListener('click', async () => {
   } catch (error) {
     notify(error.message, true);
   } finally {
-    elements.deleteTournament.disabled = !activeId || tournaments.length <= 1;
+    elements.deleteTournament.disabled = !activeId;
   }
 });
 
@@ -514,7 +515,6 @@ elements.form.addEventListener('submit', async (event) => {
   const profile = {
     id: activeId,
     name: elements.name.value,
-    maxRounds: Number(elements.maxRounds.value),
     teams: teamInputs.map((input) => input.value),
     theme: {
       title: elements.title.value,
@@ -537,6 +537,7 @@ elements.form.addEventListener('submit', async (event) => {
     });
     await loadTournaments();
     fillProfile(result.profile);
+    await loadState();
     notify('대회 설정을 저장했습니다.');
   } catch (error) {
     notify(error.message, true);

@@ -24,12 +24,16 @@
     const boardTitle = document.getElementById('board-title');
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const rowByTeam = new Map();
-    const eliminationRoundByTeam = new Map();
+    const eliminatedTeams = new Set();
+    const pendingEliminations = new Set();
     const scoreFrames = new WeakMap();
     const rankAnimations = new WeakMap();
+    const RANK_MOTION_DURATION = 500;
+    const ELIMINATION_LEAD_TIME = 80;
     let revision = -1;
     let initialized = false;
     let canvasScale = 1;
+    let renderSequence = 0;
 
     function fitCanvas() {
       canvasScale = 1;
@@ -102,7 +106,26 @@
       });
     }
 
+    function playEliminationFlash(row) {
+      row.classList.remove('elimination-flash');
+      void row.offsetWidth;
+      row.classList.add('elimination-flash');
+      const clearEliminationFlash = (event) => {
+        if (event.animationName !== 'elimination-wash') return;
+        row.classList.remove('elimination-flash');
+        row.removeEventListener('animationend', clearEliminationFlash);
+      };
+      row.addEventListener('animationend', clearEliminationFlash);
+    }
+
+    function playPendingElimination(team) {
+      if (!pendingEliminations.delete(team)) return;
+      const row = rowByTeam.get(team);
+      if (row?.classList.contains('eliminated')) playEliminationFlash(row);
+    }
+
     function render(data) {
+      const currentRender = ++renderSequence;
       const theme = data.tournament?.theme;
       if (theme) {
         boardTitle.textContent = theme.title;
@@ -132,20 +155,13 @@
         row.classList.toggle('active', statusName === 'active');
         row.classList.toggle('eliminated', statusName === 'eliminated');
         if (team.status === 'ELIMINATED') {
-          const round = Number(data.round) || 0;
-          const alreadyShown = eliminationRoundByTeam.get(team.team) === round;
-          if (!alreadyShown) {
-            row.classList.remove('elimination-flash');
-            void row.offsetWidth;
-            row.classList.add('elimination-flash');
-            const clearEliminationFlash = (event) => {
-              if (event.animationName !== 'elimination-wash') return;
-              row.classList.remove('elimination-flash');
-              row.removeEventListener('animationend', clearEliminationFlash);
-            };
-            row.addEventListener('animationend', clearEliminationFlash);
-          }
-          eliminationRoundByTeam.set(team.team, round);
+          const wasEliminated = eliminatedTeams.has(team.team);
+          if (initialized && !wasEliminated) pendingEliminations.add(team.team);
+          eliminatedTeams.add(team.team);
+        } else {
+          eliminatedTeams.delete(team.team);
+          pendingEliminations.delete(team.team);
+          row.classList.remove('elimination-flash');
         }
         row.querySelector('.rank').textContent = String(index + 1);
         row.querySelector('.team strong').textContent = team.name;
@@ -154,6 +170,7 @@
         if (!row.isConnected) rows.append(row);
       });
 
+      const currentRankAnimations = new Map();
       if (initialized && !reduceMotion.matches) {
         rowByTeam.forEach((row, team) => {
           const previousTop = previousPositions.get(team);
@@ -161,8 +178,9 @@
           const distancePhysical = previousTop - row.getBoundingClientRect().top;
           if (Math.abs(distancePhysical) < 1) return;
           row.style.willChange = 'transform';
-          const animation = row.animate(rankMotionFrames(distancePhysical), { duration: 500, easing: 'linear' });
+          const animation = row.animate(rankMotionFrames(distancePhysical), { duration: RANK_MOTION_DURATION, easing: 'linear' });
           rankAnimations.set(row, animation);
+          currentRankAnimations.set(team, animation);
           const cleanup = () => {
             if (rankAnimations.get(row) !== animation) return;
             rankAnimations.delete(row);
@@ -172,6 +190,18 @@
           animation.addEventListener('cancel', cleanup, {once: true});
         });
       }
+      pendingEliminations.forEach((team) => {
+        const animation = currentRankAnimations.get(team);
+        if (!animation) {
+          playPendingElimination(team);
+          return;
+        }
+        setTimeout(() => {
+          const row = rowByTeam.get(team);
+          if (currentRender !== renderSequence || rankAnimations.get(row) !== animation) return;
+          playPendingElimination(team);
+        }, RANK_MOTION_DURATION - ELIMINATION_LEAD_TIME);
+      });
       initialized = true;
     }
 
@@ -184,7 +214,7 @@
     }
     fitCanvas();
     update();
-    setInterval(update, 500);
+    setInterval(update, 120);
   </script>
 </body>
 </html>

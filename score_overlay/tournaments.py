@@ -33,7 +33,6 @@ DEFAULT_THEME = {
 DEFAULT_PROFILE = {
     "id": "default",
     "name": "기본 대회",
-    "maxRounds": 9,
     "teams": DEFAULT_TEAMS,
     "theme": DEFAULT_THEME,
 }
@@ -85,10 +84,6 @@ class TournamentStore:
         if any(not team or len(team) > 40 for team in clean_teams):
             raise ValueError("각 팀 이름은 1~40자로 입력하세요.")
 
-        max_rounds = int(profile.get("maxRounds", 9))
-        if not 1 <= max_rounds <= 9:
-            raise ValueError("전체 라운드는 1~9 사이에서 선택하세요.")
-
         theme = profile.get("theme") or {}
         title = str(theme.get("title", DEFAULT_THEME["title"])).strip()
         if not 1 <= len(title) <= 30:
@@ -117,7 +112,6 @@ class TournamentStore:
         return {
             "id": profile_id,
             "name": name,
-            "maxRounds": max_rounds,
             "teams": clean_teams,
             "theme": {"title": title, **colors},
         }
@@ -165,14 +159,19 @@ class TournamentStore:
 
     def delete(self, profile_id: str) -> dict:
         with self._lock:
-            if len(self._data["tournaments"]) <= 1:
-                raise ValueError("대회는 최소 한 개가 필요합니다.")
             index = next(
                 (index for index, profile in enumerate(self._data["tournaments"]) if profile["id"] == profile_id),
                 None,
             )
             if index is None:
                 raise ValueError("삭제할 대회를 찾을 수 없습니다.")
+            if len(self._data["tournaments"]) == 1:
+                self._data = {
+                    "activeTournament": "default",
+                    "tournaments": [deepcopy(DEFAULT_PROFILE)],
+                }
+                self._save_locked()
+                return deepcopy(DEFAULT_PROFILE)
             self._data["tournaments"].pop(index)
             if self._data["activeTournament"] == profile_id:
                 self._data["activeTournament"] = self._data["tournaments"][0]["id"]

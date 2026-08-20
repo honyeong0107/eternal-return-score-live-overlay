@@ -113,12 +113,13 @@ class OverlayHandler(BaseHTTPRequestHandler):
                 if self.server.live_score.is_tracking():
                     self._json({"ok": True, "tracking": True, "state": self.server.state.snapshot()})
                     return
-                if not self.server.state.snapshot()["roundOpen"]:
-                    maximum = self.server.state.snapshot()["tournament"]["maxRounds"]
-                    raise RuntimeError(f"{maximum}라운드가 종료되어 추적을 시작할 수 없습니다.")
                 active = self.server.tournaments.active()
                 names, observation = self.server.live_score.parse(active["teams"])
-                if any(team.ts is None or team.ks is None for team in observation.teams):
+                readable_scores = sum(
+                    team.ts is not None and team.ks is not None
+                    for team in observation.teams
+                )
+                if observation.day is None or readable_scores < 6:
                     raise RuntimeError("1920×1080 관전자 화면을 찾지 못했습니다.")
                 profile = self.server.tournaments.update_active_teams(names)
                 self.server.state.set_tournament(profile, reset=False)
@@ -169,8 +170,6 @@ class OverlayHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/tournaments/save":
                 payload = self._read_json()
-                if int(payload.get("maxRounds", 9)) < self.server.state.snapshot()["round"]:
-                    raise ValueError("전체 라운드는 현재 진행 라운드보다 작게 설정할 수 없습니다.")
                 previous_id = self.server.tournaments.active()["id"]
                 profile = self.server.tournaments.save(payload)
                 self.server.state.set_tournament(profile, reset=profile["id"] != previous_id)

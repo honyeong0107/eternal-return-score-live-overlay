@@ -63,7 +63,6 @@ class ScoreState:
             tournament = {
                 "id": "default",
                 "name": "기본 대회",
-                "maxRounds": 9,
                 "teams": tournament,
                 "theme": {
                     "title": "LEADERBOARD",
@@ -82,7 +81,6 @@ class ScoreState:
         self.tournament = {
             "id": tournament["id"],
             "name": tournament["name"],
-            "maxRounds": int(tournament.get("maxRounds", 9)),
             "theme": deepcopy(tournament["theme"]),
         }
         self.day = StableValue(1)
@@ -210,7 +208,7 @@ class ScoreState:
     def complete_round(self) -> dict:
         with self._lock:
             if not self.round_open:
-                raise ValueError(f"{self.tournament['maxRounds']}라운드가 이미 종료됐습니다.")
+                raise ValueError("진행 중인 라운드가 없습니다.")
             result = {
                 "round": self.round_number,
                 "teams": [
@@ -233,20 +231,17 @@ class ScoreState:
                 team.carried_ts = float(team.ts.value)
                 team.carried_ks = float(team.ks.value)
 
-            if self.round_number == self.tournament["maxRounds"]:
-                self.round_open = False
-            else:
-                self.round_number += 1
-                self.day = StableValue(1)
-                for team in self.teams:
-                    team.round_ts = StableValue(0.0)
-                    team.round_ks = StableValue(0.0)
-                    team.alive = StableValue(3)
-                    team.knocked = StableValue(0)
-                    team.respawning = StableValue(0)
-                    team.status = "ACTIVE"
-                    team.eliminated_at = None
-                    team.respawn_grace_seconds = 0.0
+            self.round_number += 1
+            self.day = StableValue(1)
+            for team in self.teams:
+                team.round_ts = StableValue(0.0)
+                team.round_ks = StableValue(0.0)
+                team.alive = StableValue(3)
+                team.knocked = StableValue(0)
+                team.respawning = StableValue(0)
+                team.status = "ACTIVE"
+                team.eliminated_at = None
+                team.respawn_grace_seconds = 0.0
             self.revision += 1
             self.updated_at = time.time()
             return deepcopy(result)
@@ -296,7 +291,7 @@ class ScoreState:
         ks: float,
         penalty: float,
     ) -> dict:
-        if not 1 <= round_number <= 9 or not 1 <= team_number <= 8:
+        if round_number < 1 or not 1 <= team_number <= 8:
             raise ValueError("라운드 또는 팀 번호가 올바르지 않습니다.")
         values = (ts, ks, penalty)
         if any(value < 0 or value > 999.5 or value * 2 != round(value * 2) for value in values):
@@ -323,11 +318,9 @@ class ScoreState:
 
     def set_tournament(self, tournament: dict, reset: bool = True) -> None:
         with self._lock:
-            previous_maximum = self.tournament["maxRounds"]
             self.tournament = {
                 "id": tournament["id"],
                 "name": tournament["name"],
-                "maxRounds": int(tournament.get("maxRounds", 9)),
                 "theme": deepcopy(tournament["theme"]),
             }
             for index, name in enumerate(tournament["teams"]):
@@ -335,19 +328,6 @@ class ScoreState:
             if reset:
                 self._reset_locked()
             else:
-                if not self.round_open and self.round_number == previous_maximum and self.tournament["maxRounds"] > previous_maximum:
-                    self.round_number += 1
-                    self.round_open = True
-                    self.day = StableValue(1)
-                    for team in self.teams:
-                        team.round_ts = StableValue(0.0)
-                        team.round_ks = StableValue(0.0)
-                        team.alive = StableValue(3)
-                        team.knocked = StableValue(0)
-                        team.respawning = StableValue(0)
-                        team.status = "ACTIVE"
-                        team.eliminated_at = None
-                        team.respawn_grace_seconds = 0.0
                 self.revision += 1
                 self.updated_at = time.time()
 
