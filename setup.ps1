@@ -26,4 +26,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "준비가 끝났습니다. 제어 화면을 여는 중입니다..."
-& $pythonExe -m score_overlay --fps 1 --open
+& $pythonExe -m score_overlay --fps 5 --open

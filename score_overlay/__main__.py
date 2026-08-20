@@ -65,7 +65,7 @@ def analyze_loop(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="이터널 리턴 경량 실시간 점수 오버레이")
-    parser.add_argument("--fps", type=float, default=3.0, help="초당 HUD 인식 횟수 (저사양 권장 2.0)")
+    parser.add_argument("--fps", type=float, default=5.0, help="초당 HUD 인식 횟수 (저사양은 3.0 권장)")
     parser.add_argument("--monitor", type=int, default=1, help="화면 캡처 모니터 번호")
     parser.add_argument(
         "--window",
