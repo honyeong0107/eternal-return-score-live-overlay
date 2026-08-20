@@ -46,6 +46,7 @@ class TeamState:
     ks: StableValue = field(default_factory=lambda: StableValue(0.0))
     round_ts: StableValue = field(default_factory=lambda: StableValue(0.0))
     round_ks: StableValue = field(default_factory=lambda: StableValue(0.0))
+    round_penalty: float = 0.0
     carried_ts: float = 0.0
     carried_ks: float = 0.0
     alive: StableValue = field(default_factory=lambda: StableValue(3))
@@ -136,7 +137,9 @@ class ScoreState:
                 round_changed = team.round_ts.observe(seen.ts)
                 round_changed |= team.round_ks.observe(seen.ks)
                 if round_changed:
-                    team.ts = StableValue(team.carried_ts + float(team.round_ts.value))
+                    team.ts = StableValue(
+                        team.carried_ts + float(team.round_ts.value) - team.round_penalty
+                    )
                     team.ks = StableValue(team.carried_ks + float(team.round_ks.value))
                     changed = True
         changed |= team.alive.observe(seen.alive)
@@ -170,7 +173,7 @@ class ScoreState:
                     round_ks = max(float(team.round_ks.value), seen.ks)
                     team.round_ts = StableValue(round_ts)
                     team.round_ks = StableValue(round_ks)
-                    team.ts = StableValue(team.carried_ts + round_ts)
+                    team.ts = StableValue(team.carried_ts + round_ts - team.round_penalty)
                     team.ks = StableValue(team.carried_ks + round_ks)
                 if seen.alive is not None:
                     team.alive = StableValue(seen.alive)
@@ -185,18 +188,22 @@ class ScoreState:
             self.revision += 1
             self.updated_at = time.time()
 
-    def adjust_current_round(self, team_number: int, ts: float, ks: float) -> None:
+    def adjust_current_round(self, team_number: int, ts: float, ks: float, penalty: float) -> None:
         if not 1 <= team_number <= 8:
             raise ValueError("팀 번호가 올바르지 않습니다.")
-        if any(value < 0 or value > 999.5 or value * 2 != round(value * 2) for value in (ts, ks)):
-            raise ValueError("점수는 0.5 단위여야 합니다.")
+        if any(
+            value < 0 or value > 999.5 or value * 2 != round(value * 2)
+            for value in (ts, ks, penalty)
+        ):
+            raise ValueError("점수와 패널티는 0.5 단위여야 합니다.")
         with self._lock:
             if not self.round_open:
                 raise ValueError("진행 중인 라운드가 없습니다.")
             team = self.teams[team_number - 1]
             team.round_ts = StableValue(ts)
             team.round_ks = StableValue(ks)
-            team.ts = StableValue(team.carried_ts + ts)
+            team.round_penalty = penalty
+            team.ts = StableValue(team.carried_ts + ts - penalty)
             team.ks = StableValue(team.carried_ks + ks)
             self.revision += 1
             self.updated_at = time.time()
@@ -216,7 +223,7 @@ class ScoreState:
                         "team": team.team,
                         "ts": float(team.round_ts.value),
                         "ks": float(team.round_ks.value),
-                        "penalty": 0.0,
+                        "penalty": team.round_penalty,
                         "alive": int(team.alive.value),
                         "knocked": int(team.knocked.value),
                         "respawning": int(team.respawning.value),
@@ -236,6 +243,7 @@ class ScoreState:
             for team in self.teams:
                 team.round_ts = StableValue(0.0)
                 team.round_ks = StableValue(0.0)
+                team.round_penalty = 0.0
                 team.alive = StableValue(3)
                 team.knocked = StableValue(0)
                 team.respawning = StableValue(0)
@@ -251,7 +259,10 @@ class ScoreState:
             if not self.rounds:
                 raise ValueError("되돌릴 종료 라운드가 없습니다.")
             if self.round_open and any(
-                float(team.round_ts.value) != 0 or float(team.round_ks.value) != 0 for team in self.teams
+                float(team.round_ts.value) != 0
+                or float(team.round_ks.value) != 0
+                or team.round_penalty != 0
+                for team in self.teams
             ):
                 raise ValueError("현재 라운드 점수가 있어 이전 라운드 종료를 되돌릴 수 없습니다.")
 
@@ -271,7 +282,8 @@ class ScoreState:
                 team.carried_ks = carried_ks
                 team.round_ts = StableValue(float(saved["ts"]))
                 team.round_ks = StableValue(float(saved["ks"]))
-                team.ts = StableValue(carried_ts + float(saved["ts"]))
+                team.round_penalty = float(saved.get("penalty", 0.0))
+                team.ts = StableValue(carried_ts + float(saved["ts"]) - team.round_penalty)
                 team.ks = StableValue(carried_ks + float(saved["ks"]))
                 team.alive = StableValue(int(saved.get("alive", 3)))
                 team.knocked = StableValue(int(saved.get("knocked", 0)))
@@ -348,6 +360,7 @@ class ScoreState:
             team.ks = StableValue(0.0)
             team.round_ts = StableValue(0.0)
             team.round_ks = StableValue(0.0)
+            team.round_penalty = 0.0
             team.carried_ts = 0.0
             team.carried_ks = 0.0
             team.alive = StableValue(3)
@@ -382,6 +395,7 @@ class ScoreState:
                         "ks": team.ks.value,
                         "roundTs": team.round_ts.value,
                         "roundKs": team.round_ks.value,
+                        "roundPenalty": team.round_penalty,
                         "alive": team.alive.value,
                         "knocked": team.knocked.value,
                         "respawning": team.respawning.value,
