@@ -1,5 +1,5 @@
 param(
-    [double]$Fps = 3.0,
+    [double]$Fps = 5.0,
     [int]$Monitor = 1
 )
 

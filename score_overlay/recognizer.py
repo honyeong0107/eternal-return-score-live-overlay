@@ -93,10 +93,9 @@ class HudRecognizer:
     def _read_team(self, frame: np.ndarray, team: int, x0: int) -> TeamObservation:
         best: Optional[tuple[float, float, int]] = None
         for line in SCORE_LINES:
-            split_x = 145 if line == SCORE_LINES[0] else 135
             parsed = self._read_score_line(
                 frame[line : line + 20, x0 : x0 + TEAM_WIDTH],
-                split_x=split_x,
+                split_x=135,
             )
             if parsed is not None:
                 best = (parsed[0], parsed[1], line)
