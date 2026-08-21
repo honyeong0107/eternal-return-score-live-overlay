@@ -17,10 +17,8 @@ from .tournaments import TournamentStore
 from .web import OverlayServer
 
 
-def application_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path.cwd()
+def default_config_path() -> Path | None:
+    return None if getattr(sys, "frozen", False) else Path("config.json")
 
 
 def monitor_capture(monitor: int):
@@ -81,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--config", type=Path, default=application_dir() / "config.json")
+    parser.add_argument("--config", type=Path, default=default_config_path())
     browser = parser.add_mutually_exclusive_group()
     browser.add_argument(
         "--open",

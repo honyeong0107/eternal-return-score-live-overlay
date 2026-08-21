@@ -8,16 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 
 
-DEFAULT_TEAMS = [
-    "MoLu",
-    "Curtain call",
-    "Just Go",
-    "Nova Strike",
-    "BirdBrain",
-    "Ride the Bike",
-    "HITMEN",
-    "ShouChikuBai",
-]
+DEFAULT_TEAMS = [""] * 8
 DEFAULT_THEME = {
     "title": "LEADERBOARD",
     "accent": "#a8d8f0",
@@ -38,19 +29,22 @@ DEFAULT_PROFILE = {
     "theme": DEFAULT_THEME,
 }
 COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
+REGISTRY_KEY = r"Software\EternalReturnScoreOverlay"
+REGISTRY_VALUE = "Config"
 
 
 class TournamentStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path | None):
         self.path = path
         self._lock = threading.Lock()
         self._data = self._load()
 
     def _load(self) -> dict:
-        if not self.path.exists():
+        raw_text = self._read_text()
+        if raw_text is None:
             return {"activeTournament": "default", "tournaments": [deepcopy(DEFAULT_PROFILE)]}
 
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        raw = json.loads(raw_text)
         if "tournaments" not in raw:
             teams = raw.get("teams", DEFAULT_TEAMS)
             profile = deepcopy(DEFAULT_PROFILE)
@@ -78,11 +72,16 @@ class TournamentStore:
         if not 1 <= len(name) <= 50:
             raise ValueError("대회 이름은 1~50자로 입력하세요.")
 
+        profile_id = str(profile.get("id", "")).strip() or cls._slug(name)
+        if not re.fullmatch(r"[a-z0-9-]{1,50}", profile_id):
+            profile_id = cls._slug(profile_id)[:50]
+
         teams = profile.get("teams")
         if not isinstance(teams, list) or len(teams) != 8:
             raise ValueError("팀 이름은 정확히 8개가 필요합니다.")
         clean_teams = [str(team).strip() for team in teams]
-        if any(not team or len(team) > 40 for team in clean_teams):
+        allow_empty_teams = profile_id == "default"
+        if any(len(team) > 40 or (not team and not allow_empty_teams) for team in clean_teams):
             raise ValueError("각 팀 이름은 1~40자로 입력하세요.")
 
         theme = profile.get("theme") or {}
@@ -107,9 +106,6 @@ class TournamentStore:
             "elimination": editable_colors["elimination"],
         }
 
-        profile_id = str(profile.get("id", "")).strip() or cls._slug(name)
-        if not re.fullmatch(r"[a-z0-9-]{1,50}", profile_id):
-            profile_id = cls._slug(profile_id)[:50]
         return {
             "id": profile_id,
             "name": name,
@@ -197,10 +193,30 @@ class TournamentStore:
         raise ValueError("활성 대회를 찾을 수 없습니다.")
 
     def _save_locked(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(self.path)
+        payload = json.dumps(self._data, ensure_ascii=False, indent=2) + "\n"
+        if self.path is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+            temporary.write_text(payload, encoding="utf-8")
+            temporary.replace(self.path)
+            return
+
+        import winreg
+
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
+            winreg.SetValueEx(key, REGISTRY_VALUE, 0, winreg.REG_SZ, payload)
+
+    def _read_text(self) -> str | None:
+        if self.path is not None:
+            if not self.path.exists():
+                return None
+            return self.path.read_text(encoding="utf-8")
+
+        import winreg
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
+                value, _ = winreg.QueryValueEx(key, REGISTRY_VALUE)
+        except FileNotFoundError:
+            return None
+        return str(value)

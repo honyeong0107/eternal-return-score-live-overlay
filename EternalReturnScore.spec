@@ -48,6 +48,7 @@ exe = EXE(
     a.datas,
     [],
     name="EternalReturnScore",
+    icon="assets/app-icon.ico",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
