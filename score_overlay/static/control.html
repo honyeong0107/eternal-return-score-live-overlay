@@ -14,7 +14,8 @@
     </div>
     <div class="header-actions">
       <span class="round-badge" id="round-current">1라운드</span>
-      <button class="button primary" id="live-score">라이브 스코어 시작</button>
+      <button class="button primary" id="live-score">1라운드 라이브 스코어 시작</button>
+      <button class="button quiet" id="undo-round" disabled>라이브 종료 되돌리기</button>
     </div>
   </header>
 
@@ -46,13 +47,12 @@
     <div class="score-workspace">
       <section class="rounds-panel" aria-labelledby="rounds-title">
         <div class="section-heading compact">
-          <h2 id="rounds-title">라운드 점수</h2>
+          <h2 id="rounds-title">라운드 현황</h2>
           <div class="round-controls">
             <select id="round-select" aria-label="라운드 선택" disabled>
               <option>라운드 없음</option>
             </select>
-            <button class="button primary" id="complete-round">1라운드 종료</button>
-            <button class="button quiet" id="undo-round" disabled>되돌리기</button>
+            <button class="button quiet" id="undo-score" disabled>마지막 수정 되돌리기</button>
           </div>
         </div>
         <div id="round-editor"></div>

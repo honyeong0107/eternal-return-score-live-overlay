@@ -10,7 +10,10 @@ from .recognizer import HudObservation, TeamObservation
 
 TEAM_COLORS = ("#d9004d", "#ee7411", "#d8ad00", "#d6c5a4", "#ec6385", "#d900aa", "#bc3c5c", "#baff00")
 TERMINAL_STATUSES = {"ELIMINATED", "ESCAPE"}
+ROUND_STATUSES = {"ACTIVE", "BREAK", "ELIMINATED", "ESCAPE"}
+STATUS_ALIASES = {"TERMINATED": "ELIMINATED"}
 CHECKPOINT_COUNTS = {5: 2, 6: 3, 7: 5, 8: 7}
+ESCAPE_CONFIRMATIONS = 3
 
 
 @dataclass
@@ -56,6 +59,7 @@ class TeamState:
     respawning: StableValue = field(default_factory=lambda: StableValue(0))
     escaped: StableValue = field(default_factory=lambda: StableValue(False))
     status: str = "ACTIVE"
+    manual_status: str | None = None
     eliminated_at: float | None = None
     escaped_at: float | None = None
     respawn_grace_seconds: float = 0.0
@@ -92,8 +96,9 @@ class ScoreState:
         }
         self.day = StableValue(1)
         self.round_number = 1
-        self.round_open = True
+        self.round_open = False
         self.rounds: list[dict] = []
+        self.score_adjustments: dict[int, list[list[dict]]] = {}
         self.checkpoint_teams: list[int] = []
         self.champion_team: int | None = None
         self.teams = [
@@ -116,6 +121,8 @@ class ScoreState:
     ) -> None:
         now = time.time()
         with self._lock:
+            if not self.round_open:
+                return
             changed = self.day.observe(observation.day)
             if observation.wipe_marker:
                 self.wipe_seen_at = now
@@ -154,11 +161,14 @@ class ScoreState:
         changed |= team.alive.observe(seen.alive)
         changed |= team.knocked.observe(seen.knocked)
         changed |= team.respawning.observe(seen.respawning)
-        changed |= team.escaped.observe(seen.escaped)
+        changed |= team.escaped.observe(seen.escaped, confirmations=ESCAPE_CONFIRMATIONS)
         return changed
 
     def _update_status(self, team: TeamState, now: float) -> bool:
         old = team.status
+        if team.manual_status is not None:
+            team.status = team.manual_status
+            return old != team.status
         alive = int(team.alive.value)
         day = int(self.day.value)
         if team.escaped_at is not None or bool(team.escaped.value):
@@ -198,30 +208,166 @@ class ScoreState:
                     if seen.respawning > 0:
                         team.respawn_grace_seconds = 10.0
                 if seen.escaped is not None:
-                    team.escaped = StableValue(seen.escaped)
+                    team.escaped.observe(seen.escaped, confirmations=ESCAPE_CONFIRMATIONS)
                 self._update_status(team, time.time())
             self._update_champion_locked()
             self.source = source
             self.revision += 1
             self.updated_at = time.time()
 
+    def begin_round(self) -> None:
+        with self._lock:
+            if self.round_open:
+                return
+            self.round_open = True
+            self.revision += 1
+            self.updated_at = time.time()
+
+    @staticmethod
+    def _validated_score_changes(changes: list[dict]) -> list[dict]:
+        if not changes:
+            raise ValueError("수정할 점수가 없습니다.")
+        normalized = []
+        seen_teams = set()
+        for change in changes:
+            team_number = int(change.get("team", 0))
+            status = str(change.get("status", "")).strip().upper() or None
+            status = STATUS_ALIASES.get(status, status)
+            values = (
+                float(change.get("ts", -1)),
+                float(change.get("ks", -1)),
+                float(change.get("penalty", 0)),
+            )
+            if not 1 <= team_number <= 8 or team_number in seen_teams:
+                raise ValueError("팀 번호가 올바르지 않습니다.")
+            if any(value < 0 or value > 999.5 or value * 2 != round(value * 2) for value in values):
+                raise ValueError("점수와 패널티는 0.5 단위여야 합니다.")
+            if status is not None and status not in ROUND_STATUSES:
+                raise ValueError("라운드 상태가 올바르지 않습니다.")
+            seen_teams.add(team_number)
+            normalized.append(
+                {
+                    "team": team_number,
+                    "ts": values[0],
+                    "ks": values[1],
+                    "penalty": values[2],
+                    "status": status,
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _current_round_values(team: TeamState) -> dict:
+        return {
+            "team": team.team,
+            "ts": float(team.round_ts.value),
+            "ks": float(team.round_ks.value),
+            "penalty": team.round_penalty,
+            "alive": int(team.alive.value),
+            "knocked": int(team.knocked.value),
+            "respawning": int(team.respawning.value),
+            "escaped": bool(team.escaped.value),
+            "status": team.status,
+            "manualStatus": team.manual_status,
+            "eliminatedAt": team.eliminated_at,
+            "escapedAt": team.escaped_at,
+            "respawnGraceSeconds": team.respawn_grace_seconds,
+        }
+
+    @staticmethod
+    def _apply_team_status(team: TeamState, status: str, now: float) -> None:
+        if status == "ACTIVE":
+            team.alive = StableValue(max(1, int(team.alive.value)))
+            team.respawning = StableValue(0)
+            team.escaped = StableValue(False)
+            team.eliminated_at = None
+            team.escaped_at = None
+            team.respawn_grace_seconds = 0.0
+        elif status == "BREAK":
+            team.alive = StableValue(0)
+            team.respawning = StableValue(max(1, int(team.respawning.value)))
+            team.escaped = StableValue(False)
+            team.eliminated_at = None
+            team.escaped_at = None
+            team.respawn_grace_seconds = max(10.0, team.respawn_grace_seconds)
+        elif status == "ELIMINATED":
+            team.alive = StableValue(0)
+            team.respawning = StableValue(0)
+            team.escaped = StableValue(False)
+            team.eliminated_at = team.eliminated_at or now
+            team.escaped_at = None
+            team.respawn_grace_seconds = 0.0
+        else:
+            team.escaped = StableValue(True)
+            team.eliminated_at = None
+            team.escaped_at = team.escaped_at or now
+            team.respawn_grace_seconds = 0.0
+        team.status = status
+        team.manual_status = status
+
+    @staticmethod
+    def _apply_saved_status(saved: dict, status: str, now: float) -> None:
+        if status == "ACTIVE":
+            saved.update(
+                alive=max(1, int(saved.get("alive", 0))),
+                respawning=0,
+                escaped=False,
+                status=status,
+                manualStatus=status,
+                eliminatedAt=None,
+                escapedAt=None,
+            )
+        elif status == "BREAK":
+            saved.update(
+                alive=0,
+                respawning=max(1, int(saved.get("respawning", 0))),
+                escaped=False,
+                status=status,
+                manualStatus=status,
+                eliminatedAt=None,
+                escapedAt=None,
+            )
+        elif status == "ELIMINATED":
+            saved.update(
+                alive=0,
+                respawning=0,
+                escaped=False,
+                status=status,
+                manualStatus=status,
+                eliminatedAt=saved.get("eliminatedAt") or now,
+                escapedAt=None,
+            )
+        else:
+            saved.update(
+                escaped=True,
+                status=status,
+                manualStatus=status,
+                eliminatedAt=None,
+                escapedAt=saved.get("escapedAt") or now,
+            )
+
     def adjust_current_round(self, team_number: int, ts: float, ks: float, penalty: float) -> None:
-        if not 1 <= team_number <= 8:
-            raise ValueError("팀 번호가 올바르지 않습니다.")
-        if any(
-            value < 0 or value > 999.5 or value * 2 != round(value * 2)
-            for value in (ts, ks, penalty)
-        ):
-            raise ValueError("점수와 패널티는 0.5 단위여야 합니다.")
+        self.adjust_current_round_batch(
+            [{"team": team_number, "ts": ts, "ks": ks, "penalty": penalty}]
+        )
+
+    def adjust_current_round_batch(self, changes: list[dict]) -> None:
+        normalized = self._validated_score_changes(changes)
         with self._lock:
             if not self.round_open:
                 raise ValueError("진행 중인 라운드가 없습니다.")
-            team = self.teams[team_number - 1]
-            team.round_ts = StableValue(ts)
-            team.round_ks = StableValue(ks)
-            team.round_penalty = penalty
-            team.ts = StableValue(team.carried_ts + ts - penalty)
-            team.ks = StableValue(team.carried_ks + ks)
+            previous = []
+            for change in normalized:
+                team = self.teams[change["team"] - 1]
+                previous.append(self._current_round_values(team))
+                team.round_ts = StableValue(change["ts"])
+                team.round_ks = StableValue(change["ks"])
+                team.round_penalty = change["penalty"]
+                team.ts = StableValue(team.carried_ts + change["ts"] - change["penalty"])
+                team.ks = StableValue(team.carried_ks + change["ks"])
+                if change["status"] is not None:
+                    self._apply_team_status(team, change["status"], time.time())
+            self.score_adjustments.setdefault(self.round_number, []).append(previous)
             self.revision += 1
             self.updated_at = time.time()
 
@@ -250,6 +396,7 @@ class ScoreState:
                         "respawning": int(team.respawning.value),
                         "escaped": bool(team.escaped.value),
                         "status": team.status,
+                        "manualStatus": team.manual_status,
                         "eliminatedAt": team.eliminated_at,
                         "escapedAt": team.escaped_at,
                     }
@@ -262,6 +409,7 @@ class ScoreState:
                 team.carried_ks = float(team.ks.value)
 
             self.round_number += 1
+            self.round_open = False
             self.checkpoint_teams = self._checkpoint_teams_for_round_locked(self.round_number)
             self.day = StableValue(1)
             for team in self.teams:
@@ -273,6 +421,7 @@ class ScoreState:
                 team.respawning = StableValue(0)
                 team.escaped = StableValue(False)
                 team.status = "ACTIVE"
+                team.manual_status = None
                 team.eliminated_at = None
                 team.escaped_at = None
                 team.respawn_grace_seconds = 0.0
@@ -325,6 +474,7 @@ class ScoreState:
                 team.respawning = StableValue(int(saved.get("respawning", 0)))
                 team.escaped = StableValue(bool(saved.get("escaped", False)))
                 team.status = str(saved.get("status", "ACTIVE"))
+                team.manual_status = saved.get("manualStatus")
                 team.eliminated_at = saved.get("eliminatedAt")
                 team.escaped_at = saved.get("escapedAt")
                 team.respawn_grace_seconds = 0.0
@@ -342,30 +492,91 @@ class ScoreState:
         ks: float,
         penalty: float,
     ) -> dict:
-        if round_number < 1 or not 1 <= team_number <= 8:
+        return self.adjust_round_batch(
+            round_number,
+            [{"team": team_number, "ts": ts, "ks": ks, "penalty": penalty}],
+        )
+
+    def adjust_round_batch(self, round_number: int, changes: list[dict]) -> dict:
+        if round_number < 1:
             raise ValueError("라운드 또는 팀 번호가 올바르지 않습니다.")
-        values = (ts, ks, penalty)
-        if any(value < 0 or value > 999.5 or value * 2 != round(value * 2) for value in values):
-            raise ValueError("점수와 패널티는 0.5 단위여야 합니다.")
+        normalized = self._validated_score_changes(changes)
         with self._lock:
             result = next((item for item in self.rounds if item["round"] == round_number), None)
             if result is None:
                 raise ValueError("종료된 라운드만 수정할 수 있습니다.")
-            saved = result["teams"][team_number - 1]
-            previous_penalty = float(saved.get("penalty", 0.0))
-            delta_ts = (ts - float(saved["ts"])) - (penalty - previous_penalty)
-            delta_ks = ks - float(saved["ks"])
-            saved["ts"] = ts
-            saved["ks"] = ks
-            saved["penalty"] = penalty
-            team = self.teams[team_number - 1]
-            team.carried_ts += delta_ts
-            team.carried_ks += delta_ks
-            team.ts = StableValue(float(team.ts.value) + delta_ts)
-            team.ks = StableValue(float(team.ks.value) + delta_ks)
+            previous = []
+            for change in normalized:
+                saved = result["teams"][change["team"] - 1]
+                previous.append(deepcopy(saved))
+                previous_penalty = float(saved.get("penalty", 0.0))
+                delta_ts = (change["ts"] - float(saved["ts"])) - (
+                    change["penalty"] - previous_penalty
+                )
+                delta_ks = change["ks"] - float(saved["ks"])
+                saved["ts"] = change["ts"]
+                saved["ks"] = change["ks"]
+                saved["penalty"] = change["penalty"]
+                team = self.teams[change["team"] - 1]
+                team.carried_ts += delta_ts
+                team.carried_ks += delta_ks
+                team.ts = StableValue(float(team.ts.value) + delta_ts)
+                team.ks = StableValue(float(team.ks.value) + delta_ks)
+                if change["status"] is not None:
+                    self._apply_saved_status(saved, change["status"], time.time())
+            self.score_adjustments.setdefault(round_number, []).append(previous)
             self.revision += 1
             self.updated_at = time.time()
             return deepcopy(result)
+
+    def undo_score_adjustment(self, round_number: int) -> dict:
+        with self._lock:
+            history = self.score_adjustments.get(round_number)
+            if not history:
+                raise ValueError("되돌릴 점수 수정이 없습니다.")
+            completed = next((item for item in self.rounds if item["round"] == round_number), None)
+            current = self.round_open and self.round_number == round_number
+            if not current and completed is None:
+                raise ValueError("선택한 라운드를 찾을 수 없습니다.")
+
+            previous = history.pop()
+            if not history:
+                del self.score_adjustments[round_number]
+            if current:
+                for saved in previous:
+                    team = self.teams[saved["team"] - 1]
+                    team.round_ts = StableValue(saved["ts"])
+                    team.round_ks = StableValue(saved["ks"])
+                    team.round_penalty = saved["penalty"]
+                    team.ts = StableValue(team.carried_ts + saved["ts"] - saved["penalty"])
+                    team.ks = StableValue(team.carried_ks + saved["ks"])
+                    team.alive = StableValue(saved["alive"])
+                    team.knocked = StableValue(saved["knocked"])
+                    team.respawning = StableValue(saved["respawning"])
+                    team.escaped = StableValue(saved["escaped"])
+                    team.status = saved["status"]
+                    team.manual_status = saved["manualStatus"]
+                    team.eliminated_at = saved["eliminatedAt"]
+                    team.escaped_at = saved["escapedAt"]
+                    team.respawn_grace_seconds = saved["respawnGraceSeconds"]
+            else:
+                for previous_score in previous:
+                    saved = completed["teams"][previous_score["team"] - 1]
+                    current_penalty = float(saved.get("penalty", 0.0))
+                    delta_ts = (previous_score["ts"] - float(saved["ts"])) - (
+                        previous_score["penalty"] - current_penalty
+                    )
+                    delta_ks = previous_score["ks"] - float(saved["ks"])
+                    saved.clear()
+                    saved.update(deepcopy(previous_score))
+                    team = self.teams[previous_score["team"] - 1]
+                    team.carried_ts += delta_ts
+                    team.carried_ks += delta_ks
+                    team.ts = StableValue(float(team.ts.value) + delta_ts)
+                    team.ks = StableValue(float(team.ks.value) + delta_ks)
+            self.revision += 1
+            self.updated_at = time.time()
+            return {"round": round_number, "teams": deepcopy(previous)}
 
     def set_tournament(self, tournament: dict, reset: bool = True) -> None:
         with self._lock:
@@ -403,8 +614,9 @@ class ScoreState:
     def _reset_locked(self) -> None:
         self.day = StableValue(1)
         self.round_number = 1
-        self.round_open = True
+        self.round_open = False
         self.rounds = []
+        self.score_adjustments = {}
         self.checkpoint_teams = []
         self.champion_team = None
         for team in self.teams:
@@ -420,6 +632,7 @@ class ScoreState:
             team.respawning = StableValue(0)
             team.escaped = StableValue(False)
             team.status = "ACTIVE"
+            team.manual_status = None
             team.eliminated_at = None
             team.escaped_at = None
             team.respawn_grace_seconds = 0.0
@@ -508,6 +721,7 @@ class ScoreState:
                 "round": self.round_number,
                 "roundOpen": self.round_open,
                 "completedRounds": deepcopy(self.rounds),
+                "scoreUndoRounds": sorted(self.score_adjustments),
                 "checkpointTeams": list(self.checkpoint_teams),
                 "championTeam": self.champion_team,
                 "teams": rows,
