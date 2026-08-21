@@ -10,7 +10,17 @@
 - GPU, CUDA, Tesseract 설치 불필요
 - 초당 5회 기본 인식 (저사양 PC는 3회 권장)
 
-## 필요한 설치
+## 쉬운 설치 (권장)
+
+1. [EternalReturnScore.exe를 다운로드](https://github.com/honyeong0107/eternal-return-score-live-overlay/releases/latest/download/EternalReturnScore.exe)합니다.
+2. 내려받은 `EternalReturnScore.exe`를 더블클릭합니다.
+3. 제어 화면이 브라우저에서 열리면 그대로 사용하면 됩니다.
+
+Python 설치와 추가 파일 다운로드는 필요하지 않습니다. Windows SmartScreen이 처음 실행을 막으면 `추가 정보`를 누르고 파일 이름이 `EternalReturnScore.exe`인지 확인한 뒤 `실행`을 선택하세요.
+
+검은 명령 창은 방송이 끝날 때까지 열어 두면 됩니다. 창을 닫으면 프로그램도 함께 종료됩니다. 대회 설정과 점수는 EXE 파일과 같은 폴더의 `config.json`에 저장됩니다.
+
+## 소스 코드로 실행하기
 
 1. Windows PC
 2. Python 3.10 이상 (`start.bat`이 설치 여부를 확인합니다.)
