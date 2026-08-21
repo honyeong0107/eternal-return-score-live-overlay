@@ -121,9 +121,9 @@ class OverlayHandler(BaseHTTPRequestHandler):
                     for team in observation.teams
                 )
                 if observation.day is None or readable_scores < 6:
-                    raise RuntimeError("1920×1080 관전자 화면을 찾지 못했습니다.")
+                    raise RuntimeError("16:9 관전자 화면에서 팀 점수를 찾지 못했습니다.")
+                active = self.server.tournaments.update_active_teams(names)
                 self.server.state.set_tournament(active, reset=False)
-                self.server.state.set_team_names(names)
                 self.server.state.begin_round()
                 self.server.state.apply_live_snapshot(observation, self.server.state.source)
                 self.server.live_score.start()

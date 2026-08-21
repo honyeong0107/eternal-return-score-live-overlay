@@ -80,7 +80,8 @@ h1 { margin: 0 0 1px; font-size: var(--title-font-size); line-height: 1; font-we
 .rank { display: flex; align-items: center; justify-content: center; width: var(--rank-size); height: var(--rank-size); padding: 0; border-radius: 3px; color: var(--rank-text); background: var(--rank); font-size: var(--rank-font-size); line-height: 1; font-weight: 900; font-variant-numeric: tabular-nums; text-align: center; }
 .team { min-width: 0; display: flex; align-items: center; gap: 2px; }
 .team strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--row-font-size); line-height: 1; font-weight: 900; }
-.checkpoint-badge { display: none; flex: none; place-items: center; width: 17px; height: 12px; border-radius: 3px; background: var(--ink); color: var(--surface); font-size: 8px; line-height: 1; font-weight: 900; }
+.checkpoint-badge { display: none; flex: none; place-items: center; width: 17px; height: 12px; border-radius: 3px; background: var(--ink); color: var(--surface); font-size: 0; line-height: 1; font-weight: 900; transform: translateX(-1px); }
+.checkpoint-badge::after { content: "CP"; font-size: 8px; line-height: 1; }
 .team-row.checkpoint { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
 .team-row.checkpoint .checkpoint-badge { display: grid; }
 .team-row .status { display: none !important; }

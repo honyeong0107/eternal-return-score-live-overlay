@@ -12,7 +12,14 @@ REFERENCE_HEIGHT = 1080
 TEAM_STARTS = (0, 188, 366, 544, 722, 900, 1078, 1255)
 TEAM_WIDTH = 178
 SCORE_LINES = (765, 795)  # selected team, normal teams
+SCORE_LINE_LAYOUTS = (SCORE_LINES, (820, 850))  # spectator controls visible, hidden
 MIN_ESCAPE_ICONS = 2
+
+
+def normalize_frame(frame: np.ndarray) -> np.ndarray:
+    if frame.shape[1] == REFERENCE_WIDTH and frame.shape[0] == REFERENCE_HEIGHT:
+        return frame
+    return cv2.resize(frame, (REFERENCE_WIDTH, REFERENCE_HEIGHT), interpolation=cv2.INTER_AREA)
 
 
 def _bitmap(rows: str) -> np.ndarray:
@@ -64,6 +71,7 @@ class HudObservation:
     teams: tuple[TeamObservation, ...]
     wipe_marker: bool
     resolution_ok: bool
+    hud_y_offset: int = 0
 
 
 class HudRecognizer:
@@ -79,33 +87,61 @@ class HudRecognizer:
 
         resolution_ok = frame.shape[1] == REFERENCE_WIDTH and frame.shape[0] == REFERENCE_HEIGHT
         if not resolution_ok:
-            frame = cv2.resize(frame, (REFERENCE_WIDTH, REFERENCE_HEIGHT), interpolation=cv2.INTER_AREA)
+            frame = normalize_frame(frame)
 
         day = self._read_day(frame)
-        teams = tuple(self._read_team(frame, index, start) for index, start in enumerate(TEAM_STARTS, 1))
+        teams: tuple[TeamObservation, ...] = ()
+        hud_y_offset = 0
+        valid_team_count = -1
+        for score_lines in SCORE_LINE_LAYOUTS:
+            candidate = tuple(
+                self._read_team(frame, index, start, score_lines)
+                for index, start in enumerate(TEAM_STARTS, 1)
+            )
+            candidate_count = sum(team.ts is not None and team.ks is not None for team in candidate)
+            if candidate_count > valid_team_count:
+                teams = candidate
+                hud_y_offset = score_lines[0] - SCORE_LINES[0]
+                valid_team_count = candidate_count
         wipe_marker = self._read_wipe_marker(frame)
-        return HudObservation(day=day, teams=teams, wipe_marker=wipe_marker, resolution_ok=resolution_ok)
+        return HudObservation(
+            day=day,
+            teams=teams,
+            wipe_marker=wipe_marker,
+            resolution_ok=resolution_ok,
+            hud_y_offset=hud_y_offset,
+        )
 
     @staticmethod
     def _empty(resolution_ok: bool) -> HudObservation:
         teams = tuple(TeamObservation(i, None, None, None, None, None) for i in range(1, 9))
         return HudObservation(None, teams, False, resolution_ok)
 
-    def _read_team(self, frame: np.ndarray, team: int, x0: int) -> TeamObservation:
-        best: Optional[tuple[float, float, int]] = None
-        for line in SCORE_LINES:
-            parsed = self._read_score_line(
-                frame[line : line + 20, x0 : x0 + TEAM_WIDTH],
-                split_x=135,
-            )
-            if parsed is not None:
-                best = (parsed[0], parsed[1], line)
+    def _read_team(
+        self,
+        frame: np.ndarray,
+        team: int,
+        x0: int,
+        score_lines: tuple[int, int] = SCORE_LINES,
+    ) -> TeamObservation:
+        best: Optional[tuple[float, float, int, int]] = None
+        x_candidates = (x0, x0 + 1) if x0 == 0 else (x0,)
+        for line in score_lines:
+            for score_x0 in x_candidates:
+                parsed = self._read_score_line(
+                    frame[line : line + 20, score_x0 : score_x0 + TEAM_WIDTH],
+                    split_x=135,
+                )
+                if parsed is not None:
+                    best = (parsed[0], parsed[1], line, score_x0)
+                    break
+            if best is not None:
                 break
 
         if best is None:
             return TeamObservation(team, None, None, None, None, None)
 
-        ts, ks, line = best
+        ts, ks, line, x0 = best
         glyph_y = line + 7
         skulls = 0
         knocked = 0
@@ -150,7 +186,7 @@ class HudRecognizer:
             3 - skulls,
             knocked,
             respawning,
-            selected=line == SCORE_LINES[0],
+            selected=line == score_lines[0],
             escaped=escape_icons >= MIN_ESCAPE_ICONS,
         )
 
