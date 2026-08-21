@@ -34,8 +34,8 @@ const elements = {
   raw: document.getElementById('raw-state'),
   roundCurrent: document.getElementById('round-current'),
   roundSelect: document.getElementById('round-select'),
-  completeRound: document.getElementById('complete-round'),
   undoRound: document.getElementById('undo-round'),
+  undoScore: document.getElementById('undo-score'),
   roundEditor: document.getElementById('round-editor'),
   totalScores: document.getElementById('total-scores'),
   toast: document.getElementById('toast'),
@@ -48,13 +48,18 @@ const THEME_PRESETS = {
   'pastel-blue': {accent: '#a8d8f0', text: '#111c22', muted: '#52656f', ks: '#3e718a', rank: '#a8d8f0', rankText: '#0e1a20', elimination: '#86aabd'},
   'pastel-red': {accent: '#f2a0a0', text: '#241616', muted: '#705858', ks: '#9c4545', rank: '#f2a0a0', rankText: '#1f1111', elimination: '#cb7474'},
 };
+const ROUND_STATUSES = [
+  {value: 'ACTIVE', label: 'ACTIVE'},
+  {value: 'BREAK', label: 'BREAK'},
+  {value: 'ELIMINATED', label: 'TERMINATED'},
+  {value: 'ESCAPE', label: 'ESCAPE'},
+];
 const THEME_FIELDS = ['accent', 'text', 'muted', 'ks', 'rank', 'rankText', 'elimination'];
 
 let tournaments = [];
 let activeId = '';
 let toastTimer;
 let isTracking = false;
-let roundOpen = true;
 let lastState = null;
 let roundsKey = '';
 
@@ -79,6 +84,10 @@ function notify(message, isError = false) {
   elements.toast.textContent = message;
   elements.toast.className = `toast show${isError ? ' error' : ''}`;
   toastTimer = setTimeout(() => { elements.toast.className = 'toast'; }, 2800);
+}
+
+function liveButtonLabel(round, tracking) {
+  return `${round}라운드 라이브 스코어 ${tracking ? '종료' : '시작'}`;
 }
 
 function fitPreview() {
@@ -171,34 +180,53 @@ function scoreInput(value, label) {
   return input;
 }
 
+function statusSelect(value, label) {
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', label);
+  ROUND_STATUSES.forEach((status) => {
+    const option = document.createElement('option');
+    option.value = status.value;
+    option.textContent = status.label;
+    select.append(option);
+  });
+  select.value = value;
+  select.dataset.original = select.value;
+  return select;
+}
+
 function renderRoundEditor(state) {
   elements.roundEditor.replaceChildren();
   const selected = elements.roundSelect.value;
   const current = selected === `current-${state.round}` && state.roundOpen;
   const selectedRound = Number(selected.replace('completed-', ''));
   const completed = current ? null : state.completedRounds.find((item) => item.round === selectedRound);
+  const roundNumber = current ? state.round : completed?.round;
+  elements.undoScore.disabled = !roundNumber || !state.scoreUndoRounds.includes(roundNumber);
   if (!current && !completed) return;
 
   const names = new Map(state.teams.map((team) => [team.team, team.name]));
   const form = document.createElement('form');
   form.className = `round-form${current ? ' current-round-form' : ''}`;
+  const table = document.createElement('div');
+  table.className = 'round-table';
   const header = document.createElement('div');
   header.className = 'round-score-header';
-  header.innerHTML = '<span>팀</span><span>KS</span><span>TS</span><span>패널티</span>';
-  form.append(header);
+  header.innerHTML = '<span>팀</span><span>상태</span><span>KS</span><span>TS</span><span>패널티</span>';
+  table.append(header);
 
   const scoreRows = current ? state.teams.map((team) => ({
     team: team.team,
     ts: team.roundTs,
     ks: team.roundKs,
     penalty: team.roundPenalty,
+    status: team.status,
   })) : completed.teams;
   scoreRows.forEach((team) => {
     const row = document.createElement('div');
     row.className = 'round-score-row';
     const name = document.createElement('strong');
     name.textContent = names.get(team.team);
-    const roundNumber = current ? state.round : completed.round;
+    const status = statusSelect(team.status || 'ACTIVE', `${roundNumber}라운드 ${names.get(team.team)} 상태`);
     const ts = scoreInput(team.ts, `${roundNumber}라운드 ${names.get(team.team)} TS`);
     const ks = scoreInput(team.ks, `${roundNumber}라운드 ${names.get(team.team)} KS`);
     ts.dataset.team = String(team.team);
@@ -208,9 +236,12 @@ function renderRoundEditor(state) {
     const penalty = scoreInput(team.penalty || 0, `${roundNumber}라운드 ${names.get(team.team)} 패널티`);
     penalty.dataset.team = String(team.team);
     penalty.dataset.score = 'penalty';
-    row.append(name, ks, ts, penalty);
-    form.append(row);
+    status.dataset.team = String(team.team);
+    status.dataset.score = 'status';
+    row.append(name, status, ks, ts, penalty);
+    table.append(row);
   });
+  form.append(table);
 
   const save = document.createElement('button');
   save.className = 'button primary round-save';
@@ -223,36 +254,33 @@ function renderRoundEditor(state) {
       const ts = form.querySelector(`[data-team="${team.team}"][data-score="ts"]`);
       const ks = form.querySelector(`[data-team="${team.team}"][data-score="ks"]`);
       const penalty = form.querySelector(`[data-team="${team.team}"][data-score="penalty"]`);
+      const status = form.querySelector(`[data-team="${team.team}"][data-score="status"]`);
       return ts.value !== ts.dataset.original || ks.value !== ks.dataset.original
-        || (penalty && penalty.value !== penalty.dataset.original);
+        || penalty.value !== penalty.dataset.original || status.value !== status.dataset.original;
     });
     if (!changedTeams.length) return;
     save.disabled = true;
     try {
-      for (const team of changedTeams) {
+      const changes = changedTeams.map((team) => {
         const ts = form.querySelector(`[data-team="${team.team}"][data-score="ts"]`);
         const ks = form.querySelector(`[data-team="${team.team}"][data-score="ks"]`);
         const penalty = form.querySelector(`[data-team="${team.team}"][data-score="penalty"]`);
-        await api(current ? '/api/live-score/adjust' : '/api/rounds/adjust', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(current
-            ? {
-              team: team.team,
-              ts: Number(ts.value),
-              ks: Number(ks.value),
-              penalty: Number(penalty.value),
-            }
-            : {
-              round: completed.round,
-              team: team.team,
-              ts: Number(ts.value),
-              ks: Number(ks.value),
-              penalty: Number(penalty.value),
-            }),
-        });
-      }
-      form.querySelectorAll('input').forEach((input) => { input.dataset.original = input.value; });
+        const status = form.querySelector(`[data-team="${team.team}"][data-score="status"]`);
+        const change = {
+          team: team.team,
+          ts: Number(ts.value),
+          ks: Number(ks.value),
+          penalty: Number(penalty.value),
+        };
+        if (status.value !== status.dataset.original) change.status = status.value;
+        return change;
+      });
+      await api(current ? '/api/live-score/adjust' : '/api/rounds/adjust', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(current ? {changes} : {round: completed.round, changes}),
+      });
+      form.querySelectorAll('input, select').forEach((input) => { input.dataset.original = input.value; });
       roundsKey = '';
       await loadState();
       notify(current
@@ -271,31 +299,29 @@ function renderRounds(state) {
   const previousTournamentId = lastState?.tournament?.id;
   const tournamentChanged = previousTournamentId !== state.tournament.id;
   lastState = state;
-  roundOpen = Boolean(state.roundOpen);
   elements.roundCurrent.textContent = `${state.round}라운드`;
-  elements.completeRound.disabled = !roundOpen;
-  elements.undoRound.disabled = !state.completedRounds.length || (roundOpen && state.teams.some((team) => (
+  elements.undoRound.disabled = isTracking || !state.completedRounds.length || (state.roundOpen && state.teams.some((team) => (
     Number(team.roundTs) !== 0
     || Number(team.roundKs) !== 0
     || Number(team.roundPenalty) !== 0
   )));
-  elements.completeRound.textContent = `${state.round}라운드 종료`;
-  elements.live.disabled = !roundOpen;
 
   const nextKey = JSON.stringify({
     tournament: state.tournament.id,
     round: state.round,
     roundOpen: state.roundOpen,
     completed: state.completedRounds,
+    scoreUndoRounds: state.scoreUndoRounds,
     current: state.teams.map((team) => [
       team.team,
       team.roundKs,
       team.roundTs,
       team.roundPenalty,
+      team.status,
     ]),
   });
   if (nextKey === roundsKey) return;
-  const dirty = [...elements.roundEditor.querySelectorAll('input')]
+  const dirty = [...elements.roundEditor.querySelectorAll('input, select')]
     .some((input) => input.value !== input.dataset.original);
   if (dirty && !tournamentChanged) return;
   const previous = elements.roundSelect.value;
@@ -357,11 +383,13 @@ async function loadState() {
       ? state.capture.title
       : (['starting', 'screen'].includes(state.health.source) ? '현재 모니터 화면' : state.health.source);
     isTracking = Boolean(state.tracking);
-    elements.live.textContent = isTracking ? '라이브 스코어 종료' : '라이브 스코어 시작';
+    elements.live.textContent = liveButtonLabel(state.round, isTracking);
     elements.live.classList.toggle('tracking', isTracking);
     elements.connection.textContent = isTracking
       ? '추적 중 · 점수판이 실시간으로 갱신됩니다.'
-      : '대기 중 · 시작하면 현재 경기 점수를 이어서 추적합니다.';
+      : (state.roundOpen
+        ? `대기 중 · 시작하면 ${state.round}라운드를 이어서 추적합니다.`
+        : `대기 중 · 시작하면 ${state.round}라운드 추적을 시작합니다.`);
     elements.source.textContent = state.capture?.error ? '창 캡처 종료됨' : source;
     elements.tracking.textContent = isTracking ? '진행 중' : '대기 중';
     elements.resolution.textContent = state.health.resolutionOk ? '1920 × 1080' : '자동 변환 중';
@@ -377,20 +405,24 @@ async function loadState() {
 
 elements.live.addEventListener('click', async () => {
   const stopping = isTracking;
+  const current = lastState?.round || 1;
+  if (stopping && (!current || !confirm(`${current}라운드 라이브 스코어를 종료하고 점수를 확정할까요?`))) return;
   elements.live.disabled = true;
-  elements.live.textContent = stopping ? '종료하는 중…' : '팀명과 점수 읽는 중…';
+  elements.live.textContent = stopping
+    ? `${current}라운드 종료하는 중…`
+    : `${current}라운드 점수 읽는 중…`;
   try {
-    const result = await api(stopping ? '/api/live-score/stop' : '/api/live-score/start', {method: 'POST'});
+    const result = await api(stopping ? '/api/rounds/complete' : '/api/live-score/start', {method: 'POST'});
     if (!stopping) await loadTournaments();
     await loadState();
     notify(stopping
-      ? '추적을 종료했습니다. 누적 점수는 그대로 유지됩니다.'
+      ? `${current}라운드 라이브 스코어를 종료하고 점수를 확정했습니다.`
       : `${result.teams.length}개 팀의 라이브 스코어 추적을 시작했습니다.`);
   } catch (error) {
     notify(error.message, true);
   } finally {
-    elements.live.disabled = !roundOpen;
-    elements.live.textContent = isTracking ? '라이브 스코어 종료' : '라이브 스코어 시작';
+    elements.live.disabled = false;
+    elements.live.textContent = liveButtonLabel(lastState?.round || current, isTracking);
   }
 });
 
@@ -429,27 +461,33 @@ elements.refreshWindows.addEventListener('click', async () => {
   }
 });
 
-elements.completeRound.addEventListener('click', async () => {
-  const current = lastState?.round;
-  if (!current || !confirm(`${current}라운드를 종료할까요?`)) return;
-  elements.completeRound.disabled = true;
-  try {
-    await api('/api/rounds/complete', {method: 'POST'});
-    await loadState();
-    notify(`${current}라운드 점수를 저장했습니다.`);
-  } catch (error) {
-    notify(error.message, true);
-  }
-});
-
 elements.undoRound.addEventListener('click', async () => {
   const previous = lastState?.completedRounds?.at(-1)?.round;
-  if (!previous || !confirm(`${previous}라운드 종료를 되돌릴까요?`)) return;
+  if (!previous || !confirm(`방금 한 라이브 스코어 종료를 되돌리고 ${previous}라운드를 다시 열까요?`)) return;
   elements.undoRound.disabled = true;
   try {
     await api('/api/rounds/undo', {method: 'POST'});
     await loadState();
     notify(`${previous}라운드를 다시 진행합니다.`);
+  } catch (error) {
+    notify(error.message, true);
+  }
+});
+
+elements.undoScore.addEventListener('click', async () => {
+  const selected = elements.roundSelect.value;
+  const round = Number(selected.split('-').at(-1));
+  if (!round || !confirm(`${round}라운드에서 마지막으로 저장한 수정을 되돌릴까요?`)) return;
+  elements.undoScore.disabled = true;
+  try {
+    await api('/api/rounds/adjust/undo', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({round}),
+    });
+    roundsKey = '';
+    await loadState();
+    notify(`${round}라운드의 마지막 수정을 되돌렸습니다.`);
   } catch (error) {
     notify(error.message, true);
   }
