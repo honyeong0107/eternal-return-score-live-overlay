@@ -10,15 +10,11 @@
 - GPU, CUDA, Tesseract 설치 불필요
 - 초당 5회 기본 인식 (저사양 PC는 3회 권장)
 
-## 쉬운 설치 (권장)
+## EXE 배포 일시 중단
 
-1. [EternalReturnScore.exe를 다운로드](https://github.com/honyeong0107/eternal-return-score-live-overlay/releases/latest/download/EternalReturnScore.exe)합니다.
-2. 내려받은 `EternalReturnScore.exe`를 더블클릭합니다.
-3. 제어 화면이 브라우저에서 열리면 그대로 사용하면 됩니다.
+Microsoft Defender 탐지가 재현되어 EXE 다운로드를 제거했습니다. 조사가 끝나기 전에는 기존 EXE를 실행하거나 격리 복원·Defender 예외 처리를 하지 마세요.
 
-Python 설치와 추가 파일 다운로드는 필요하지 않습니다. Windows SmartScreen이 처음 실행을 막으면 `추가 정보`를 누르고 파일 이름이 `EternalReturnScore.exe`인지 확인한 뒤 `실행`을 선택하세요.
-
-검은 명령 창은 방송이 끝날 때까지 열어 두면 됩니다. 창을 닫으면 프로그램도 함께 종료됩니다. EXE 버전은 실행 폴더에 `config.json`이나 다른 추가 파일을 만들지 않으며, 대회 설정은 Windows 사용자 설정에 저장합니다.
+현재는 아래의 소스 코드 실행 방법만 사용해 주세요.
 
 ## 소스 코드로 실행하기
 
