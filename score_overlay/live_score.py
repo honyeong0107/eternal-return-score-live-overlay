@@ -9,7 +9,13 @@ from pathlib import Path
 
 import numpy as np
 
-from .recognizer import HudObservation, HudRecognizer, TEAM_STARTS, TEAM_WIDTH
+from .recognizer import (
+    HudObservation,
+    HudRecognizer,
+    TEAM_STARTS,
+    TEAM_WIDTH,
+    normalize_frame,
+)
 
 
 KOREAN_MODEL_PATH = Path(__file__).with_name("models") / "korean_PP-OCRv5_rec_mobile.onnx"
@@ -86,10 +92,11 @@ class LiveScoreCapture:
         with self._lock:
             if not self._recent_frames:
                 raise RuntimeError("아직 읽을 수 있는 게임 화면이 없습니다.")
-            frames = [frame.copy() for frame in self._recent_frames]
+            source_frames = [frame.copy() for frame in self._recent_frames]
 
         recognizer = HudRecognizer()
-        observations = [recognizer.analyze(frame) for frame in frames]
+        observations = [recognizer.analyze(frame) for frame in source_frames]
+        frames = [normalize_frame(frame) for frame in source_frames]
         observation = observations[-1]
 
         try:
@@ -101,7 +108,13 @@ class LiveScoreCapture:
         candidates: list[list[str]] = [[] for _ in TEAM_STARTS]
         for frame, seen in reversed(list(zip(frames, observations))):
             for index, team in enumerate(seen.teams):
-                crop = self._name_crop(frame, index, team.selected, PRIMARY_NAME_LEFT)
+                crop = self._name_crop(
+                    frame,
+                    index,
+                    team.selected,
+                    PRIMARY_NAME_LEFT,
+                    seen.hud_y_offset,
+                )
                 result, _ = primary(crop)
                 parsed = self._pick_name(result)
                 if parsed:
@@ -122,7 +135,13 @@ class LiveScoreCapture:
                 for index in missing:
                     team = seen.teams[index]
                     left = SELECTED_KOREAN_NAME_LEFT if team.selected else KOREAN_NAME_LEFT
-                    crop = self._name_crop(frame, index, team.selected, left)
+                    crop = self._name_crop(
+                        frame,
+                        index,
+                        team.selected,
+                        left,
+                        seen.hud_y_offset,
+                    )
                     result, _ = korean(crop)
                     parsed = self._pick_name(result)
                     if parsed:
@@ -142,10 +161,16 @@ class LiveScoreCapture:
         return parsed_names, observation
 
     @staticmethod
-    def _name_crop(frame: np.ndarray, index: int, selected: bool, left: int) -> np.ndarray:
+    def _name_crop(
+        frame: np.ndarray,
+        index: int,
+        selected: bool,
+        left: int,
+        hud_y_offset: int = 0,
+    ) -> np.ndarray:
         x0 = TEAM_STARTS[index]
         x1 = TEAM_STARTS[index + 1] if index + 1 < len(TEAM_STARTS) else x0 + TEAM_WIDTH
-        y0 = SELECTED_NAME_Y if selected else NORMAL_NAME_Y
+        y0 = (SELECTED_NAME_Y if selected else NORMAL_NAME_Y) + hud_y_offset
         return frame[y0 : y0 + NAME_HEIGHT, x0 + left : x1]
 
     @staticmethod
