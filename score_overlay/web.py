@@ -94,8 +94,9 @@ class OverlayHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/reset":
                 self.server.live_score.stop()
-                self.server.state.reset()
-                self._json({"ok": True})
+                profile = self.server.tournaments.active()
+                self.server.state.set_tournament(profile, reset=True)
+                self._json({"ok": True, "profile": profile, "state": self.server.state.snapshot()})
                 return
             if path == "/api/capture/select":
                 if self.server.capture_source is None:
@@ -121,8 +122,8 @@ class OverlayHandler(BaseHTTPRequestHandler):
                 )
                 if observation.day is None or readable_scores < 6:
                     raise RuntimeError("1920×1080 관전자 화면을 찾지 못했습니다.")
-                profile = self.server.tournaments.update_active_teams(names)
-                self.server.state.set_tournament(profile, reset=False)
+                self.server.state.set_tournament(active, reset=False)
+                self.server.state.set_team_names(names)
                 self.server.state.begin_round()
                 self.server.state.apply_live_snapshot(observation, self.server.state.source)
                 self.server.live_score.start()

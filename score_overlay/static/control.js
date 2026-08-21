@@ -347,9 +347,13 @@ function renderRounds(state) {
   elements.roundSelect.replaceChildren(...options);
   elements.roundSelect.disabled = options.length === 1 && !options[0].value;
   const available = options.some((option) => option.value === previous);
-  elements.roundSelect.value = available ? previous : (state.roundOpen
-    ? `current-${state.round}`
-    : `completed-${state.completedRounds.at(-1).round}`);
+  elements.roundSelect.value = available
+    ? previous
+    : (state.roundOpen
+      ? `current-${state.round}`
+      : (state.completedRounds.length
+        ? `completed-${state.completedRounds.at(-1).round}`
+        : ''));
   renderRoundEditor(state);
 }
 
@@ -591,10 +595,11 @@ elements.form.addEventListener('submit', async (event) => {
 });
 
 elements.reset.addEventListener('click', async () => {
-  if (!confirm('현재 점수와 전멸 상태를 모두 초기화할까요?')) return;
+  if (!confirm('현재 점수, 라운드 현황과 인식된 팀 이름을 모두 초기화할까요?')) return;
   try {
     await api('/api/reset', {method: 'POST'});
-    await loadState();
+    roundsKey = '';
+    await Promise.all([loadTournaments(), loadState()]);
     notify('새 경기를 시작할 준비가 됐습니다.');
   } catch (error) {
     notify(error.message, true);
