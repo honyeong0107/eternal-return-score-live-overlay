@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import threading
 import time
 import webbrowser
@@ -14,6 +15,12 @@ from .live_score import LiveScoreCapture
 from .state import ScoreState
 from .tournaments import TournamentStore
 from .web import OverlayServer
+
+
+def application_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path.cwd()
 
 
 def monitor_capture(monitor: int):
@@ -74,8 +81,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--config", type=Path, default=Path("config.json"))
-    parser.add_argument("--open", action="store_true", help="제어 페이지를 기본 브라우저에서 열기")
+    parser.add_argument("--config", type=Path, default=application_dir() / "config.json")
+    browser = parser.add_mutually_exclusive_group()
+    browser.add_argument(
+        "--open",
+        dest="open",
+        action="store_true",
+        help="제어 페이지를 기본 브라우저에서 열기",
+    )
+    browser.add_argument(
+        "--no-open",
+        dest="open",
+        action="store_false",
+        help="제어 페이지를 자동으로 열지 않기",
+    )
+    parser.set_defaults(open=bool(getattr(sys, "frozen", False)))
     args = parser.parse_args()
     if not 0.25 <= args.fps <= 10:
         parser.error("--fps는 0.25에서 10 사이여야 합니다.")
