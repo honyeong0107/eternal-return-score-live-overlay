@@ -1,4 +1,7 @@
 .venv/
+.build-venv/
+build-exe/
+release/
 __pycache__/
 *.pyc
 .pytest_cache/
