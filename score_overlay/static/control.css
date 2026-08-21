@@ -47,11 +47,13 @@ code { max-width: 420px; overflow: hidden; text-overflow: ellipsis; padding: 8px
 .totals-panel h2 { margin-bottom: 12px; }
 .round-controls { display: flex; align-items: center; gap: 8px; }
 .round-controls select { width: 150px; min-height: 36px; padding-block: 6px; }
-.round-score-header, .round-score-row { display: grid; grid-template-columns: minmax(140px, 1fr) repeat(3, 84px); align-items: center; gap: 8px; }
+.round-table { overflow-x: auto; }
+.round-score-header, .round-score-row { min-width: 620px; display: grid; grid-template-columns: minmax(140px, 1fr) 116px repeat(3, 78px); align-items: center; gap: 8px; }
 .round-score-header, .total-score-header { padding: 6px 10px; color: var(--muted); font-size: .72rem; font-weight: 600; letter-spacing: .02em; }
 .round-score-row { min-height: 46px; padding: 5px 10px; border-top: 1px solid #e5e5e7; }
 .round-score-row strong, .total-score-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; font-weight: 500; }
-.round-score-row input { min-height: 34px; height: 34px; padding: 5px 8px; text-align: center; font-variant-numeric: tabular-nums; }
+.round-score-row input, .round-score-row select { min-height: 34px; height: 34px; padding: 5px 8px; font-size: .82rem; }
+.round-score-row input { text-align: center; font-variant-numeric: tabular-nums; }
 .round-save { margin-top: 14px; }
 .total-score-header, .total-score-row { display: grid; grid-template-columns: minmax(120px, 1fr) 58px 58px; align-items: center; gap: 8px; }
 .total-score-header span:not(:first-child), .total-score-row span { text-align: center; }
@@ -95,6 +97,7 @@ legend { padding: 0 10px 0 0; }
 .actions { display: flex; align-items: center; gap: 10px; margin-top: 22px; }
 .button { min-height: 36px; padding: 8px 15px; border: 1px solid transparent; border-radius: 999px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background-color .16s ease-out, border-color .16s ease-out, color .16s ease-out, opacity .16s ease-out; }
 .app-header .button.primary { min-height: 44px; padding: 11px 21px; font-size: 15px; }
+.app-header .button.quiet { min-height: 44px; padding: 11px 18px; font-size: 15px; }
 .button:disabled { cursor: wait; opacity: .5; }
 .button.primary { background: var(--blue); color: #fff; }
 .button.primary:hover { background: var(--blue-hover); }
@@ -120,7 +123,7 @@ pre { max-height: 320px; overflow: auto; padding: 12px; border-radius: 8px; back
 @media (max-width: 820px) {
   .app-header, .section-heading { align-items: stretch; flex-direction: column; }
   .header-actions { align-items: stretch; flex-direction: column; }
-  .app-header .primary { width: 100%; }
+  .app-header .button { width: 100%; }
   main { width: min(100% - 28px, 680px); margin-top: 20px; }
   .url-row { align-items: stretch; flex-direction: column; }
   code { max-width: none; }
@@ -138,7 +141,6 @@ pre { max-height: 320px; overflow: auto; padding: 12px; border-radius: 8px; back
   .button.danger { margin-left: 0; }
   .round-controls { align-items: stretch; flex-direction: column; }
   .round-controls select, .round-controls .button { width: 100%; }
-  .round-score-header, .round-score-row { grid-template-columns: minmax(92px, 1fr) repeat(3, 62px); gap: 5px; padding-inline: 2px; }
-  .round-score-row input { padding-inline: 3px; }
+  .round-score-header, .round-score-row { padding-inline: 2px; }
 }
 @media (prefers-reduced-motion: reduce) { .button, .toast { transition: none; } }

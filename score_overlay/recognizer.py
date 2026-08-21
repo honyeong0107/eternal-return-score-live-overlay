@@ -12,6 +12,7 @@ REFERENCE_HEIGHT = 1080
 TEAM_STARTS = (0, 188, 366, 544, 722, 900, 1078, 1255)
 TEAM_WIDTH = 178
 SCORE_LINES = (765, 795)  # selected team, normal teams
+MIN_ESCAPE_ICONS = 2
 
 
 def _bitmap(rows: str) -> np.ndarray:
@@ -109,7 +110,7 @@ class HudRecognizer:
         skulls = 0
         knocked = 0
         respawning = 0
-        escaped = False
+        escape_icons = 0
         for center_x in (31, 88, 145):
             timer_visible = self._has_respawn_timer(frame, line, x0, center_x)
             patch = frame[glyph_y + 37 : glyph_y + 76, x0 + center_x - 14 : x0 + center_x + 15]
@@ -133,7 +134,7 @@ class HudRecognizer:
                 & (hsv[:, :, 2] > 135)
             )
             if int(escape_green.sum()) >= 120:
-                escaped = True
+                escape_icons += 1
             if timer_visible:
                 skulls += 1
                 respawning += 1
@@ -150,7 +151,7 @@ class HudRecognizer:
             knocked,
             respawning,
             selected=line == SCORE_LINES[0],
-            escaped=escaped,
+            escaped=escape_icons >= MIN_ESCAPE_ICONS,
         )
 
     @staticmethod

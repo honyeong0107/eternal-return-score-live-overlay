@@ -123,6 +123,7 @@ class OverlayHandler(BaseHTTPRequestHandler):
                     raise RuntimeError("1920×1080 관전자 화면을 찾지 못했습니다.")
                 profile = self.server.tournaments.update_active_teams(names)
                 self.server.state.set_tournament(profile, reset=False)
+                self.server.state.begin_round()
                 self.server.state.apply_live_snapshot(observation, self.server.state.source)
                 self.server.live_score.start()
                 self._json({"ok": True, "tracking": True, "teams": names, "state": self.server.state.snapshot()})
@@ -133,12 +134,16 @@ class OverlayHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/live-score/adjust":
                 payload = self._read_json()
-                self.server.state.adjust_current_round(
-                    int(payload.get("team", 0)),
-                    float(payload.get("ts", -1)),
-                    float(payload.get("ks", -1)),
-                    float(payload.get("penalty", 0)),
-                )
+                changes = payload.get("changes")
+                if isinstance(changes, list):
+                    self.server.state.adjust_current_round_batch(changes)
+                else:
+                    self.server.state.adjust_current_round(
+                        int(payload.get("team", 0)),
+                        float(payload.get("ts", -1)),
+                        float(payload.get("ks", -1)),
+                        float(payload.get("penalty", 0)),
+                    )
                 self._json({"ok": True, "state": self.server.state.snapshot()})
                 return
             if path == "/api/rounds/complete":
@@ -148,13 +153,24 @@ class OverlayHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/rounds/adjust":
                 payload = self._read_json()
-                result = self.server.state.adjust_round(
-                    int(payload.get("round", 0)),
-                    int(payload.get("team", 0)),
-                    float(payload.get("ts", -1)),
-                    float(payload.get("ks", -1)),
-                    float(payload.get("penalty", 0)),
-                )
+                changes = payload.get("changes")
+                if isinstance(changes, list):
+                    result = self.server.state.adjust_round_batch(
+                        int(payload.get("round", 0)), changes
+                    )
+                else:
+                    result = self.server.state.adjust_round(
+                        int(payload.get("round", 0)),
+                        int(payload.get("team", 0)),
+                        float(payload.get("ts", -1)),
+                        float(payload.get("ks", -1)),
+                        float(payload.get("penalty", 0)),
+                    )
+                self._json({"ok": True, "round": result, "state": self.server.state.snapshot()})
+                return
+            if path == "/api/rounds/adjust/undo":
+                payload = self._read_json()
+                result = self.server.state.undo_score_adjustment(int(payload.get("round", 0)))
                 self._json({"ok": True, "round": result, "state": self.server.state.snapshot()})
                 return
             if path == "/api/rounds/undo":
