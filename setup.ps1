@@ -1,22 +1,66 @@
 ﻿$ErrorActionPreference = "Stop"
 $workspaceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pythonExe = Join-Path $workspaceDir ".venv\Scripts\python.exe"
+$venvDir = Join-Path $workspaceDir ".venv"
+$pythonExe = Join-Path $venvDir "Scripts\python.exe"
 $requirementsPath = Join-Path $workspaceDir "requirements.txt"
+$pythonDownloadUrl = "https://www.python.org/downloads/windows/"
 
 Set-Location -LiteralPath $workspaceDir
 
+function Test-CompatiblePython {
+    param(
+        [string]$Program,
+        [string[]]$Arguments = @()
+    )
+
+    try {
+        & $Program @Arguments -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
+}
+
 if (-not (Test-Path -LiteralPath $pythonExe)) {
-    Write-Host "처음 실행 준비 중입니다. 잠시만 기다려 주세요..."
-    $pythonLauncher = Get-Command py -ErrorAction SilentlyContinue
-    if ($pythonLauncher) {
-        & py -3 -m venv .venv
+    $pythonProgram = $null
+    $pythonArguments = @()
+    $pythonLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($pythonLauncher -and (Test-CompatiblePython -Program $pythonLauncher.Source -Arguments @("-3"))) {
+        $pythonProgram = $pythonLauncher.Source
+        $pythonArguments = @("-3")
     }
     else {
-        $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $pythonCommand) {
-            throw "Python 3가 필요합니다. https://www.python.org/downloads/ 에서 설치한 뒤 다시 실행하세요."
+        $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+        $isStoreAlias = $pythonCommand -and $pythonCommand.Source -like "*\WindowsApps\python.exe"
+        if ($pythonCommand -and -not $isStoreAlias -and (Test-CompatiblePython -Program $pythonCommand.Source)) {
+            $pythonProgram = $pythonCommand.Source
         }
-        & python -m venv .venv
+    }
+
+    if (-not $pythonProgram) {
+        Write-Host ""
+        Write-Host "Python 3.10 이상이 필요합니다." -ForegroundColor Yellow
+        Write-Host "지금 Python 공식 다운로드 페이지를 엽니다."
+        Write-Host ""
+        Write-Host "1. Python 3 설치 파일을 내려받아 실행해 주세요."
+        Write-Host "2. 설치 첫 화면의 'Add python.exe to PATH'를 꼭 체크해 주세요."
+        Write-Host "3. 설치가 끝나면 이 창을 닫고 start.bat을 다시 실행해 주세요."
+        Write-Host ""
+        Write-Host $pythonDownloadUrl -ForegroundColor Cyan
+        try {
+            Start-Process $pythonDownloadUrl
+        }
+        catch {
+            Write-Host "브라우저가 열리지 않으면 위 주소를 직접 열어 주세요."
+        }
+        exit 2
+    }
+
+    Write-Host "처음 실행 준비 중입니다. 필요한 구성 요소를 설치합니다..."
+    & $pythonProgram @pythonArguments -m venv $venvDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python 가상 환경을 만들지 못했습니다."
     }
 }
 
