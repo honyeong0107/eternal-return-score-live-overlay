@@ -5,6 +5,7 @@ import threading
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field
+from math import isclose
 from typing import Callable
 
 from .recognizer import HudObservation, TeamObservation
@@ -814,7 +815,20 @@ class ScoreState:
         remaining = [
             team.team for team in self.teams if team.status not in TERMINAL_STATUSES
         ]
-        return remaining[0] if len(remaining) == 1 else None
+        status_winner = remaining[0] if len(remaining) == 1 else None
+        score_winners = [
+            team.team
+            for team in self.teams
+            if isclose(
+                float(team.round_ts.value) - float(team.round_ks.value),
+                10.0,
+                abs_tol=1e-9,
+            )
+        ]
+        score_winner = score_winners[0] if len(score_winners) == 1 else None
+        if status_winner is not None and score_winner is not None:
+            return status_winner if status_winner == score_winner else None
+        return status_winner if status_winner is not None else score_winner
 
     def _completed_champion_locked(self) -> int | None:
         for completed in self.rounds:
@@ -893,3 +907,43 @@ class ScoreState:
                     "wipeMarkerRecent": time.time() - self.wipe_seen_at < 5,
                 },
             }
+
+    def public_snapshot(self) -> dict:
+        snapshot = self.snapshot()
+        theme = snapshot["tournament"]["theme"]
+        return {
+            "schemaVersion": 1,
+            "revision": int(snapshot["revision"]),
+            "updatedAt": int(float(snapshot["updatedAt"]) * 1000),
+            "tournament": {
+                "id": snapshot["tournament"]["id"],
+                "name": snapshot["tournament"]["name"],
+                "theme": {
+                    "title": theme["title"],
+                    "accent": theme["accent"],
+                    "surface": "#ffffff",
+                    "text": theme["text"],
+                    "muted": theme["muted"],
+                    "ks": theme["ks"],
+                    "rank": theme["rank"],
+                    "rankText": theme["rankText"],
+                    "line": "#000000",
+                    "elimination": theme["elimination"],
+                },
+            },
+            "day": int(snapshot["day"]),
+            "round": int(snapshot["round"]),
+            "roundOpen": bool(snapshot["roundOpen"]),
+            "teams": [
+                {
+                    "team": int(team["team"]),
+                    "name": team["name"] or f"TEAM {int(team['team'])}",
+                    "ts": float(team["ts"]),
+                    "ks": float(team["ks"]),
+                    "status": team["status"],
+                    "checkpoint": bool(team["checkpoint"]),
+                    "champion": bool(team["champion"]),
+                }
+                for team in snapshot["teams"]
+            ],
+        }

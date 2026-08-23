@@ -45,6 +45,65 @@
       </div>
     </section>
 
+    <section class="etercut-panel" aria-labelledby="etercut-title">
+      <div class="section-heading compact">
+        <div>
+          <h2 id="etercut-title">ETERCUT 방송 연동</h2>
+          <p>점수는 ETERCUT으로 전송하고, 방송인별 OBS·설정 링크는 이 컴퓨터에서만 관리합니다.</p>
+        </div>
+        <div class="etercut-state" id="etercut-state" data-state="idle">연동 안 됨</div>
+      </div>
+
+      <div class="etercut-workspace">
+        <form class="etercut-config" id="etercut-config-form">
+          <label class="rule-toggle etercut-enabled">
+            <input id="etercut-enabled" type="checkbox">
+            <span>
+              <strong>실시간 점수 전송</strong>
+              <small>사용하면 점수 변경과 수동 수정이 ETERCUT에 반영됩니다.</small>
+            </span>
+          </label>
+          <label class="field full">
+            <span>API 주소</span>
+            <input id="etercut-endpoint" type="url" value="https://api.etercut.com/api/live-score" required>
+          </label>
+          <div class="etercut-pairing" id="etercut-pairing">
+            <label class="field full">
+              <span>연결 코드</span>
+              <input id="etercut-pairing-code" type="password" autocomplete="one-time-code" placeholder="서버 운영자에게 받은 일회용 코드">
+            </label>
+            <button class="button primary" id="etercut-pair" type="button">이 PC 연결</button>
+            <p>처음 한 번만 입력합니다. 연결 코드는 저장하지 않습니다.</p>
+          </div>
+          <p class="credential-note" id="etercut-credential-note">연결하면 이 PC가 직접 인증 정보를 만들고 안전하게 보관합니다.</p>
+          <div class="etercut-config-actions">
+            <button class="button primary" type="submit">연동 설정 저장</button>
+            <button class="button quiet" id="etercut-sync-now" type="button">지금 전송</button>
+          </div>
+        </form>
+
+        <section class="streamer-manager" aria-labelledby="streamer-links-title">
+          <div class="streamer-heading">
+            <div>
+              <h3 id="streamer-links-title">방송인별 링크</h3>
+              <p>링크를 중지하거나 재발급하면 이전 주소는 즉시 사용할 수 없습니다.</p>
+            </div>
+            <button class="button quiet" id="streamer-refresh" type="button">새로고침</button>
+          </div>
+          <form class="streamer-create" id="streamer-create-form">
+            <label class="field">
+              <span>방송인 이름</span>
+              <input id="streamer-name" maxlength="50" placeholder="예: Caster A" required>
+            </label>
+            <button class="button primary" type="submit">링크 만들기</button>
+          </form>
+          <div class="streamer-list" id="streamer-list">
+            <p class="streamer-empty">이 PC를 연결하면 방송인 링크를 관리할 수 있습니다.</p>
+          </div>
+        </section>
+      </div>
+    </section>
+
     <div class="score-workspace">
       <section class="rounds-panel" aria-labelledby="rounds-title">
         <div class="section-heading compact">

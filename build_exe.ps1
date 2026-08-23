@@ -23,7 +23,8 @@ if (-not (Test-Path -LiteralPath $pythonExe)) {
     "numpy>=2,<3" `
     "opencv-python-headless>=4.10,<5" `
     "mss>=10,<11" `
-    "rapidocr-onnxruntime>=1.2,<2"
+    "rapidocr-onnxruntime>=1.2,<2" `
+    "cryptography>=42,<47"
 if ($LASTEXITCODE -ne 0) {
     throw "빌드 의존성을 설치하지 못했습니다."
 }

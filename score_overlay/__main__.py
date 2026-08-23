@@ -13,6 +13,7 @@ import numpy as np
 from .capture import WindowCaptureSource
 from .recognizer import HudRecognizer
 from .live_score import LiveScoreCapture
+from .remote_sync import RemoteStateSync
 from .state import ScoreState
 from .tournaments import TournamentStore
 from .web import OverlayServer
@@ -106,7 +107,14 @@ def main() -> int:
     tournaments = TournamentStore(args.config)
     state = ScoreState(tournaments.active())
     state.restore_session(tournaments.load_session())
-    state.set_change_callback(tournaments.save_session)
+    remote_sync = RemoteStateSync(state, tournaments)
+
+    def on_state_changed(session: dict) -> None:
+        tournaments.save_session(session)
+        remote_sync.notify_changed()
+
+    state.set_change_callback(on_state_changed)
+    remote_sync.start()
     live_score = LiveScoreCapture()
     capture_source = WindowCaptureSource(args.fps)
     if args.window.casefold() not in {"", "none", "monitor"}:
@@ -122,7 +130,14 @@ def main() -> int:
     )
     worker.start()
 
-    server = OverlayServer((args.host, args.port), state, tournaments, live_score, capture_source)
+    server = OverlayServer(
+        (args.host, args.port),
+        state,
+        tournaments,
+        live_score,
+        capture_source,
+        remote_sync,
+    )
     url = f"http://{args.host}:{args.port}"
     print(f"제어 페이지: {url}")
     print(f"OBS 브라우저 소스: {url}/overlay (800x600)")
@@ -136,6 +151,7 @@ def main() -> int:
         stop.set()
         live_score.stop()
         capture_source.stop()
+        remote_sync.close()
         server.shutdown()
         server.server_close()
     return 0

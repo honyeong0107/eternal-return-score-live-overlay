@@ -42,6 +42,19 @@ const elements = {
   roundEditor: document.getElementById('round-editor'),
   totalScores: document.getElementById('total-scores'),
   toast: document.getElementById('toast'),
+  etercutState: document.getElementById('etercut-state'),
+  etercutConfigForm: document.getElementById('etercut-config-form'),
+  etercutEnabled: document.getElementById('etercut-enabled'),
+  etercutEndpoint: document.getElementById('etercut-endpoint'),
+  etercutPairing: document.getElementById('etercut-pairing'),
+  etercutPairingCode: document.getElementById('etercut-pairing-code'),
+  etercutPair: document.getElementById('etercut-pair'),
+  etercutCredentialNote: document.getElementById('etercut-credential-note'),
+  etercutSyncNow: document.getElementById('etercut-sync-now'),
+  streamerRefresh: document.getElementById('streamer-refresh'),
+  streamerCreateForm: document.getElementById('streamer-create-form'),
+  streamerName: document.getElementById('streamer-name'),
+  streamerList: document.getElementById('streamer-list'),
 };
 
 const THEME_PRESETS = {
@@ -65,6 +78,8 @@ let toastTimer;
 let isTracking = false;
 let lastState = null;
 let roundsKey = '';
+let remoteStatus = null;
+let streamerViews = [];
 
 for (let index = 1; index <= 8; index += 1) {
   const label = document.createElement('label');
@@ -87,6 +102,113 @@ function notify(message, isError = false) {
   elements.toast.textContent = message;
   elements.toast.className = `toast show${isError ? ' error' : ''}`;
   toastTimer = setTimeout(() => { elements.toast.className = 'toast'; }, 2800);
+}
+
+function remotePost(path, payload) {
+  const options = {method: 'POST'};
+  if (payload !== undefined) {
+    options.headers = {'Content-Type': 'application/json'};
+    options.body = JSON.stringify(payload);
+  }
+  return api(path, options);
+}
+
+function renderRemoteStatus(status, {updateForm = true} = {}) {
+  remoteStatus = status;
+  if (updateForm) {
+    elements.etercutEnabled.checked = Boolean(status.enabled);
+    elements.etercutEndpoint.value = status.endpoint || 'https://api.etercut.com/api/live-score';
+  }
+  const paired = Boolean(status.paired);
+  const connected = paired && status.enabled && status.connected;
+  const error = paired && status.enabled && Boolean(status.error);
+  elements.etercutState.dataset.state = connected ? 'connected' : error ? 'error' : 'idle';
+  elements.etercutState.textContent = connected
+    ? '연결됨'
+    : error
+      ? '전송 오류'
+      : !paired
+        ? 'PC 연결 필요'
+        : status.enabled
+        ? '연결 대기'
+        : '연동 안 됨';
+  elements.etercutPairing.hidden = paired;
+  elements.etercutCredentialNote.textContent = paired && status.error
+    ? `이 PC 인증 완료 · ${status.error}`
+    : status.lastSuccessAt
+      ? `이 PC 인증 완료 · 마지막 전송 ${new Date(status.lastSuccessAt).toLocaleString()}`
+      : paired
+        ? '이 PC 인증 완료 · 개인키와 방송인 링크는 현재 Windows 계정으로 암호화해 저장합니다.'
+        : '연결하면 이 PC가 인증 정보를 만들고 서버에는 공개키만 등록합니다.';
+  elements.etercutSyncNow.disabled = !paired || !status.enabled;
+  elements.streamerRefresh.disabled = !paired;
+  elements.streamerCreateForm.querySelector('[type="submit"]').disabled = !paired;
+}
+
+async function loadRemoteStatus(options) {
+  const status = await api('/api/remote-sync');
+  renderRemoteStatus(status, options);
+  return status;
+}
+
+function streamerAction(label, action, {danger = false, disabled = false} = {}) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `streamer-action${danger ? ' danger' : ''}`;
+  button.textContent = label;
+  button.dataset.action = action;
+  button.disabled = disabled;
+  return button;
+}
+
+function renderStreamerViews() {
+  if (!streamerViews.length) {
+    const empty = document.createElement('p');
+    empty.className = 'streamer-empty';
+    empty.textContent = remoteStatus?.paired
+      ? '등록된 방송인 링크가 없습니다.'
+      : '이 PC를 연결하면 방송인 링크를 관리할 수 있습니다.';
+    elements.streamerList.replaceChildren(empty);
+    return;
+  }
+  elements.streamerList.replaceChildren(...streamerViews.map((view) => {
+    const row = document.createElement('article');
+    row.className = 'streamer-row';
+    row.dataset.viewId = view.viewId;
+    row.dataset.inactive = String(!view.active);
+    const identity = document.createElement('div');
+    identity.className = 'streamer-identity';
+    const name = document.createElement('strong');
+    name.textContent = view.name;
+    const status = document.createElement('span');
+    status.textContent = !view.linksAvailable
+      ? '로컬 링크 없음 · 재발급 필요'
+      : view.active ? '사용 중' : '중지됨';
+    identity.append(name, status);
+    const actions = document.createElement('div');
+    actions.className = 'streamer-actions';
+    actions.append(
+      streamerAction('OBS 복사', 'copy-overlay', {disabled: !view.linksAvailable}),
+      streamerAction('설정 복사', 'copy-settings', {disabled: !view.linksAvailable}),
+      streamerAction(view.active ? '중지' : '다시 사용', 'toggle'),
+      streamerAction('재발급', 'rotate'),
+      streamerAction('삭제', 'delete', {danger: true}),
+    );
+    row._view = view;
+    row.append(identity, actions);
+    return row;
+  }));
+}
+
+async function loadStreamerViews() {
+  if (!remoteStatus?.paired) {
+    streamerViews = [];
+    renderStreamerViews();
+    return;
+  }
+  const result = await remotePost('/api/remote-sync/views/list');
+  streamerViews = result.views;
+  renderStreamerViews();
 }
 
 function liveButtonLabel(round, tracking) {
@@ -668,8 +790,140 @@ elements.copyUrl.addEventListener('click', async () => {
   }
 });
 
+elements.etercutConfigForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submit = elements.etercutConfigForm.querySelector('[type="submit"]');
+  submit.disabled = true;
+  try {
+    const status = await remotePost('/api/remote-sync/settings', {
+      enabled: elements.etercutEnabled.checked,
+      endpoint: elements.etercutEndpoint.value,
+    });
+    renderRemoteStatus(status);
+    await loadStreamerViews();
+    notify('ETERCUT 연동 설정을 저장했습니다.');
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+elements.etercutPair.addEventListener('click', async () => {
+  elements.etercutPair.disabled = true;
+  try {
+    const status = await remotePost('/api/remote-sync/pair', {
+      endpoint: elements.etercutEndpoint.value,
+      pairingToken: elements.etercutPairingCode.value,
+    });
+    elements.etercutPairingCode.value = '';
+    renderRemoteStatus(status);
+    await loadStreamerViews();
+    notify('이 PC를 ETERCUT에 연결했습니다. 연결 코드는 저장하지 않았습니다.');
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    elements.etercutPair.disabled = false;
+  }
+});
+
+elements.etercutPairingCode.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  elements.etercutPair.click();
+});
+
+elements.etercutSyncNow.addEventListener('click', async () => {
+  elements.etercutSyncNow.disabled = true;
+  try {
+    const status = await remotePost('/api/remote-sync/now');
+    renderRemoteStatus(status);
+    notify('최신 점수 전송을 요청했습니다.');
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    elements.etercutSyncNow.disabled = !remoteStatus?.paired || !remoteStatus?.enabled;
+  }
+});
+
+elements.streamerRefresh.addEventListener('click', async () => {
+  elements.streamerRefresh.disabled = true;
+  try {
+    await loadStreamerViews();
+    notify('방송인 링크 목록을 새로고침했습니다.');
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    elements.streamerRefresh.disabled = !remoteStatus?.paired;
+  }
+});
+
+elements.streamerCreateForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submit = elements.streamerCreateForm.querySelector('[type="submit"]');
+  submit.disabled = true;
+  try {
+    const result = await remotePost('/api/remote-sync/views/create', {name: elements.streamerName.value});
+    streamerViews.push(result.view);
+    elements.streamerName.value = '';
+    renderStreamerViews();
+    notify(`${result.view.name} 방송 링크를 만들었습니다.`);
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    submit.disabled = !remoteStatus?.paired;
+  }
+});
+
+elements.streamerList.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-action]');
+  const row = button?.closest('.streamer-row');
+  const view = row?._view;
+  if (!button || !view) return;
+  const action = button.dataset.action;
+  if (action === 'copy-overlay' || action === 'copy-settings') {
+    const url = action === 'copy-overlay' ? view.overlayUrl : view.settingsUrl;
+    try {
+      await navigator.clipboard.writeText(url);
+      notify(action === 'copy-overlay' ? 'OBS 링크를 복사했습니다.' : '방송인 설정 링크를 복사했습니다.');
+    } catch (_) {
+      notify('클립보드에 복사하지 못했습니다.', true);
+    }
+    return;
+  }
+  if (action === 'rotate' && !confirm(`${view.name}의 링크를 재발급할까요? 이전 OBS·설정 링크는 즉시 중지됩니다.`)) return;
+  if (action === 'delete' && !confirm(`${view.name} 링크를 완전히 삭제할까요?`)) return;
+  button.disabled = true;
+  try {
+    if (action === 'toggle') {
+      const result = await remotePost('/api/remote-sync/views/active', {
+        viewId: view.viewId,
+        active: !view.active,
+      });
+      streamerViews = streamerViews.map((item) => item.viewId === view.viewId ? result.view : item);
+      notify(result.view.active ? `${view.name} 링크를 다시 열었습니다.` : `${view.name} 링크를 중지했습니다.`);
+    } else if (action === 'rotate') {
+      const result = await remotePost('/api/remote-sync/views/rotate', {viewId: view.viewId});
+      streamerViews = streamerViews.map((item) => item.viewId === view.viewId ? result.view : item);
+      notify(`${view.name} 링크를 재발급했습니다. 새 링크를 다시 전달하세요.`);
+    } else if (action === 'delete') {
+      await remotePost('/api/remote-sync/views/delete', {viewId: view.viewId});
+      streamerViews = streamerViews.filter((item) => item.viewId !== view.viewId);
+      notify(`${view.name} 링크를 삭제했습니다.`);
+    }
+    renderStreamerViews();
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 elements.overlayUrl.textContent = `${location.origin}/overlay`;
 new ResizeObserver(fitPreview).observe(elements.previewFrame);
 fitPreview();
-Promise.all([loadTournaments(), loadCaptureWindows(), loadState()]).catch((error) => notify(error.message, true));
+Promise.all([loadTournaments(), loadCaptureWindows(), loadState(), loadRemoteStatus()])
+  .then(() => loadStreamerViews())
+  .catch((error) => notify(error.message, true));
 setInterval(loadState, 1000);
+setInterval(() => loadRemoteStatus({updateForm: false}).catch(() => {}), 3000);

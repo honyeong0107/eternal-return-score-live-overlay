@@ -7,6 +7,9 @@ import threading
 import unicodedata
 from copy import deepcopy
 from pathlib import Path
+from urllib.parse import urlparse
+
+from .secret_store import SecretProtector
 
 
 DEFAULT_TEAMS = [""] * 8
@@ -32,13 +35,16 @@ DEFAULT_PROFILE = {
     "theme": DEFAULT_THEME,
 }
 COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
+VIEW_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 REGISTRY_KEY = r"Software\EternalReturnScoreOverlay"
 REGISTRY_VALUE = "Config"
+DEFAULT_REMOTE_SYNC_ENDPOINT = "https://api.etercut.com/api/live-score"
 
 
 class TournamentStore:
-    def __init__(self, path: Path | None):
+    def __init__(self, path: Path | None, secret_protector: SecretProtector | None = None):
         self.path = path
+        self._secret_protector = secret_protector or SecretProtector()
         self._lock = threading.Lock()
         self._data = self._load()
 
@@ -48,6 +54,7 @@ class TournamentStore:
             return {
                 "activeTournament": "default",
                 "tournaments": [deepcopy(DEFAULT_PROFILE)],
+                "remoteSync": self._normalize_remote_sync(None),
             }
 
         raw = json.loads(raw_text)
@@ -60,7 +67,11 @@ class TournamentStore:
             else:
                 profile.pop("teamNamesConfigured", None)
             profile = self._validate(profile)
-            data = {"activeTournament": "default", "tournaments": [profile]}
+            data = {
+                "activeTournament": "default",
+                "tournaments": [profile],
+                "remoteSync": self._normalize_remote_sync(raw.get("remoteSync")),
+            }
             sessions = self._load_sessions(raw, {profile["id"]})
             if sessions:
                 data["scoreSessions"] = sessions
@@ -73,11 +84,49 @@ class TournamentStore:
         active = raw.get("activeTournament")
         if active not in ids:
             active = profiles[0]["id"]
-        data = {"activeTournament": active, "tournaments": profiles}
+        data = {
+            "activeTournament": active,
+            "tournaments": profiles,
+            "remoteSync": self._normalize_remote_sync(raw.get("remoteSync")),
+        }
         sessions = self._load_sessions(raw, ids)
         if sessions:
             data["scoreSessions"] = sessions
         return data
+
+    @staticmethod
+    def _normalize_remote_sync(value: object) -> dict:
+        source = value if isinstance(value, dict) else {}
+        endpoint = str(source.get("endpoint", DEFAULT_REMOTE_SYNC_ENDPOINT)).strip()
+        if not endpoint:
+            endpoint = DEFAULT_REMOTE_SYNC_ENDPOINT
+        raw_view_tokens = source.get("viewTokens")
+        view_tokens = {}
+        if isinstance(raw_view_tokens, dict):
+            for view_id, tokens in raw_view_tokens.items():
+                clean_view_id = str(view_id).strip()
+                if not VIEW_ID_PATTERN.fullmatch(clean_view_id) or not isinstance(tokens, dict):
+                    continue
+                view_tokens[clean_view_id] = {
+                    "readTokenProtected": str(tokens.get("readTokenProtected", "")),
+                    "editTokenProtected": str(tokens.get("editTokenProtected", "")),
+                }
+        return {
+            "enabled": bool(source.get("enabled", False)),
+            "endpoint": endpoint.rstrip("/"),
+            "operatorPaired": bool(source.get("operatorPaired", False)),
+            "writePrivateKeyProtected": str(source.get("writePrivateKeyProtected", "")),
+            "writePublicKey": str(source.get("writePublicKey", "")),
+            "adminPrivateKeyProtected": str(source.get("adminPrivateKeyProtected", "")),
+            "adminPublicKey": str(source.get("adminPublicKey", "")),
+            "viewTokens": view_tokens,
+            "legacyWriteTokenProtected": str(
+                source.get("legacyWriteTokenProtected", source.get("writeTokenProtected", ""))
+            ),
+            "legacyAdminTokenProtected": str(
+                source.get("legacyAdminTokenProtected", source.get("adminTokenProtected", ""))
+            ),
+        }
 
     @staticmethod
     def _load_sessions(raw: dict, tournament_ids: set[str]) -> dict[str, dict]:
@@ -176,6 +225,141 @@ class TournamentStore:
                 "tournaments": deepcopy(self._data["tournaments"]),
             }
 
+    def remote_sync(self) -> dict:
+        with self._lock:
+            value = deepcopy(self._data["remoteSync"])
+        credential_error = ""
+        try:
+            write_private_key = self._secret_protector.unprotect(
+                value["writePrivateKeyProtected"]
+            )
+            admin_private_key = self._secret_protector.unprotect(
+                value["adminPrivateKeyProtected"]
+            )
+        except RuntimeError as error:
+            write_private_key = ""
+            admin_private_key = ""
+            credential_error = str(error)
+        return {
+            "enabled": value["enabled"],
+            "endpoint": value["endpoint"],
+            "paired": bool(value["operatorPaired"]),
+            "writePrivateKey": write_private_key,
+            "writePublicKey": value["writePublicKey"],
+            "adminPrivateKey": admin_private_key,
+            "adminPublicKey": value["adminPublicKey"],
+            "credentialError": credential_error,
+        }
+
+    def remote_sync_public(self) -> dict:
+        with self._lock:
+            value = self._data["remoteSync"]
+            return {
+                "enabled": value["enabled"],
+                "endpoint": value["endpoint"],
+                "paired": bool(
+                    value["operatorPaired"]
+                    and value["writePrivateKeyProtected"]
+                    and value["adminPrivateKeyProtected"]
+                ),
+            }
+
+    def save_remote_sync(self, value: dict) -> dict:
+        endpoint = str(value.get("endpoint", DEFAULT_REMOTE_SYNC_ENDPOINT)).strip().rstrip("/")
+        parsed = urlparse(endpoint)
+        local_http = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+        if (
+            not (parsed.scheme == "https" or local_http)
+            or not parsed.netloc
+            or parsed.path != "/api/live-score"
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("API 주소는 https://.../api/live-score 형식이어야 합니다.")
+        with self._lock:
+            current = self._data["remoteSync"]
+            updated = deepcopy(current)
+            updated["enabled"] = bool(value.get("enabled", current["enabled"]))
+            updated["endpoint"] = endpoint
+            self._data["remoteSync"] = updated
+            self._save_locked()
+        return self.remote_sync_public()
+
+    def save_operator_identities(
+        self,
+        write_identity: dict[str, str],
+        admin_identity: dict[str, str],
+    ) -> None:
+        with self._lock:
+            remote = self._data["remoteSync"]
+            remote["writePrivateKeyProtected"] = self._secret_protector.protect(
+                write_identity["privateKey"]
+            )
+            remote["writePublicKey"] = write_identity["publicKey"]
+            remote["adminPrivateKeyProtected"] = self._secret_protector.protect(
+                admin_identity["privateKey"]
+            )
+            remote["adminPublicKey"] = admin_identity["publicKey"]
+            remote["operatorPaired"] = False
+            self._save_locked()
+
+    def mark_operator_paired(self) -> None:
+        with self._lock:
+            remote = self._data["remoteSync"]
+            if not remote["writePrivateKeyProtected"] or not remote["adminPrivateKeyProtected"]:
+                raise RuntimeError("이 컴퓨터의 ETERCUT 인증 정보를 찾을 수 없습니다.")
+            remote["operatorPaired"] = True
+            remote["legacyWriteTokenProtected"] = ""
+            remote["legacyAdminTokenProtected"] = ""
+            self._save_locked()
+
+    def legacy_pairing_token(self) -> str:
+        with self._lock:
+            protected = self._data["remoteSync"]["legacyAdminTokenProtected"]
+        try:
+            return self._secret_protector.unprotect(protected)
+        except RuntimeError:
+            return ""
+
+    def view_tokens(self, view_id: str) -> dict[str, str] | None:
+        clean_view_id = str(view_id).strip()
+        if not VIEW_ID_PATTERN.fullmatch(clean_view_id):
+            return None
+        with self._lock:
+            protected = deepcopy(
+                self._data["remoteSync"]["viewTokens"].get(clean_view_id)
+            )
+        if not protected:
+            return None
+        try:
+            read_token = self._secret_protector.unprotect(protected["readTokenProtected"])
+            edit_token = self._secret_protector.unprotect(protected["editTokenProtected"])
+        except RuntimeError:
+            return None
+        if not read_token or not edit_token:
+            return None
+        return {"readToken": read_token, "editToken": edit_token}
+
+    def save_view_tokens(self, view_id: str, read_token: str, edit_token: str) -> None:
+        clean_view_id = str(view_id).strip()
+        if not VIEW_ID_PATTERN.fullmatch(clean_view_id):
+            raise ValueError("방송인 링크 식별자가 올바르지 않습니다.")
+        if not read_token or not edit_token:
+            raise ValueError("방송인 링크 토큰이 비어 있습니다.")
+        with self._lock:
+            self._data["remoteSync"]["viewTokens"][clean_view_id] = {
+                "readTokenProtected": self._secret_protector.protect(read_token),
+                "editTokenProtected": self._secret_protector.protect(edit_token),
+            }
+            self._save_locked()
+
+    def delete_view_tokens(self, view_id: str) -> None:
+        with self._lock:
+            removed = self._data["remoteSync"]["viewTokens"].pop(str(view_id), None)
+            if removed is not None:
+                self._save_locked()
+
     def load_session(self) -> dict | None:
         with self._lock:
             sessions = self._data.get("scoreSessions", {})
@@ -241,6 +425,7 @@ class TournamentStore:
                 self._data = {
                     "activeTournament": "default",
                     "tournaments": [deepcopy(DEFAULT_PROFILE)],
+                    "remoteSync": deepcopy(self._data["remoteSync"]),
                 }
                 self._save_locked()
                 return deepcopy(DEFAULT_PROFILE)

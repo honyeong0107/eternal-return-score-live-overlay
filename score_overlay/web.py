@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -9,6 +10,7 @@ from urllib.parse import urlparse
 
 from .capture import WindowCaptureSource
 from .live_score import LiveScoreCapture
+from .remote_sync import RemoteStateSync
 from .state import ScoreState
 from .tournaments import TournamentStore
 
@@ -26,11 +28,13 @@ class OverlayServer(ThreadingHTTPServer):
         tournaments: TournamentStore,
         live_score: LiveScoreCapture,
         capture_source: WindowCaptureSource | None = None,
+        remote_sync: RemoteStateSync | None = None,
     ):
         self.state = state
         self.tournaments = tournaments
         self.live_score = live_score
         self.capture_source = capture_source
+        self.remote_sync = remote_sync
         super().__init__(address, OverlayHandler)
 
 
@@ -64,6 +68,12 @@ class OverlayHandler(BaseHTTPRequestHandler):
         if path == "/api/tournaments":
             self._json(self.server.tournaments.snapshot())
             return
+        if path == "/api/remote-sync":
+            if not self._can_manage_remote():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self._json({"ok": True, **self.server.remote_sync.status()})
+            return
         if path in ("/", "/control"):
             self._file("control.html", "text/html; charset=utf-8")
             return
@@ -92,7 +102,53 @@ class OverlayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path.startswith("/api/remote-sync/") and not self._can_manage_remote():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
         try:
+            if path == "/api/remote-sync/pair":
+                payload = self._read_json()
+                self.server.tournaments.save_remote_sync(
+                    {"endpoint": payload.get("endpoint", "")}
+                )
+                status = self.server.remote_sync.pair(payload.get("pairingToken", ""))
+                self._json({"ok": True, **status})
+                return
+            if path == "/api/remote-sync/settings":
+                payload = self._read_json()
+                settings = self.server.tournaments.save_remote_sync(payload)
+                self.server.remote_sync.configuration_changed()
+                self._json({"ok": True, **settings, **self.server.remote_sync.status()})
+                return
+            if path == "/api/remote-sync/now":
+                self._json({"ok": True, **self.server.remote_sync.sync_now()})
+                return
+            if path == "/api/remote-sync/views/list":
+                self._json({"ok": True, "views": self.server.remote_sync.list_views()})
+                return
+            if path == "/api/remote-sync/views/create":
+                payload = self._read_json()
+                self._json({"ok": True, "view": self.server.remote_sync.create_view(payload.get("name", ""))})
+                return
+            if path == "/api/remote-sync/views/rotate":
+                payload = self._read_json()
+                self._json({"ok": True, "view": self.server.remote_sync.rotate_view(str(payload.get("viewId", "")))})
+                return
+            if path == "/api/remote-sync/views/active":
+                payload = self._read_json()
+                self._json({
+                    "ok": True,
+                    "view": self.server.remote_sync.set_view_active(
+                        str(payload.get("viewId", "")),
+                        bool(payload.get("active")),
+                    ),
+                })
+                return
+            if path == "/api/remote-sync/views/delete":
+                payload = self._read_json()
+                self.server.remote_sync.delete_view(str(payload.get("viewId", "")))
+                self._json({"ok": True})
+                return
             if path == "/api/reset":
                 self.server.live_score.stop()
                 profile = self.server.tournaments.active()
@@ -272,6 +328,14 @@ class OverlayHandler(BaseHTTPRequestHandler):
             )
             return
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _can_manage_remote(self) -> bool:
+        if self.server.remote_sync is None:
+            return False
+        try:
+            return ipaddress.ip_address(self.client_address[0]).is_loopback
+        except ValueError:
+            return False
 
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))

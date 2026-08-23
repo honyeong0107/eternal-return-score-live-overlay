@@ -3,3 +3,4 @@ opencv-python>=4.10,<5
 mss>=10,<11
 windows-capture>=2.0,<3
 rapidocr-onnxruntime==1.2.3
+cryptography>=42,<47
