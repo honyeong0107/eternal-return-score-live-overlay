@@ -1,9 +1,11 @@
+# Powered by Honyeong
 from __future__ import annotations
 
 import threading
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field
+from typing import Callable
 
 from .recognizer import HudObservation, TeamObservation
 
@@ -13,7 +15,8 @@ TERMINAL_STATUSES = {"ELIMINATED", "ESCAPE"}
 ROUND_STATUSES = {"ACTIVE", "BREAK", "ELIMINATED", "ESCAPE"}
 STATUS_ALIASES = {"TERMINATED": "ELIMINATED"}
 CHECKPOINT_COUNTS = {5: 2, 6: 3, 7: 5, 8: 7}
-ESCAPE_CONFIRMATIONS = 3
+ESCAPE_CONFIRMATIONS = 2
+ELIMINATION_CONFIRMATIONS = 3
 
 
 @dataclass
@@ -111,6 +114,140 @@ class ScoreState:
         self.resolution_ok = True
         self.wipe_seen_at = 0.0
         self.revision = 0
+        self._change_callback: Callable[[dict], None] | None = None
+
+    def set_change_callback(self, callback: Callable[[dict], None] | None) -> None:
+        with self._lock:
+            self._change_callback = callback
+
+    def _mark_changed_locked(self) -> None:
+        self.revision += 1
+        self.updated_at = time.time()
+        if self._change_callback is not None:
+            self._change_callback(self._session_locked())
+
+    def _session_locked(self) -> dict:
+        return {
+            "version": 1,
+            "tournamentId": self.tournament["id"],
+            "day": int(self.day.value),
+            "roundNumber": self.round_number,
+            "roundOpen": self.round_open,
+            "completedRounds": deepcopy(self.rounds),
+            "scoreAdjustments": deepcopy(self.score_adjustments),
+            "checkpointTeams": list(self.checkpoint_teams),
+            "championTeam": self.champion_team,
+            "teams": [
+                {
+                    **self._current_round_values(team),
+                    "totalTs": float(team.ts.value),
+                    "totalKs": float(team.ks.value),
+                    "carriedTs": team.carried_ts,
+                    "carriedKs": team.carried_ks,
+                }
+                for team in self.teams
+            ],
+        }
+
+    def export_session(self) -> dict:
+        with self._lock:
+            return self._session_locked()
+
+    def restore_session(self, session: dict | None) -> bool:
+        try:
+            if not isinstance(session, dict) or int(session.get("version", 0)) != 1:
+                return False
+            if session.get("tournamentId") != self.tournament["id"]:
+                return False
+            saved_teams = session["teams"]
+            if not isinstance(saved_teams, list) or len(saved_teams) != len(self.teams):
+                return False
+
+            teams = []
+            for expected_team, saved in enumerate(saved_teams, 1):
+                if int(saved.get("team", 0)) != expected_team:
+                    return False
+                status = str(saved.get("status", "ACTIVE"))
+                manual_status = saved.get("manualStatus")
+                if manual_status == "ACTIVE":
+                    manual_status = None
+                if status not in ROUND_STATUSES or (
+                    manual_status is not None and manual_status not in ROUND_STATUSES
+                ):
+                    return False
+                teams.append(
+                    {
+                        "roundTs": float(saved.get("ts", 0.0)),
+                        "roundKs": float(saved.get("ks", 0.0)),
+                        "penalty": float(saved.get("penalty", 0.0)),
+                        "totalTs": float(saved.get("totalTs", 0.0)),
+                        "totalKs": float(saved.get("totalKs", 0.0)),
+                        "carriedTs": float(saved.get("carriedTs", 0.0)),
+                        "carriedKs": float(saved.get("carriedKs", 0.0)),
+                        "alive": int(saved.get("alive", 3)),
+                        "knocked": int(saved.get("knocked", 0)),
+                        "respawning": int(saved.get("respawning", 0)),
+                        "escaped": bool(saved.get("escaped", False)),
+                        "status": status,
+                        "manualStatus": manual_status,
+                        "eliminatedAt": saved.get("eliminatedAt"),
+                        "escapedAt": saved.get("escapedAt"),
+                        "respawnGraceSeconds": float(saved.get("respawnGraceSeconds", 0.0)),
+                    }
+                )
+
+            round_number = int(session.get("roundNumber", 1))
+            day = int(session.get("day", 1))
+            completed_rounds = session.get("completedRounds", [])
+            raw_adjustments = session.get("scoreAdjustments", {})
+            checkpoint_teams = [int(team) for team in session.get("checkpointTeams", [])]
+            champion_team = session.get("championTeam")
+            if round_number < 1 or day < 1 or not isinstance(completed_rounds, list):
+                return False
+            if not isinstance(raw_adjustments, dict):
+                return False
+            score_adjustments = {
+                int(round_key): deepcopy(history)
+                for round_key, history in raw_adjustments.items()
+            }
+            if any(team not in range(1, 9) for team in checkpoint_teams):
+                return False
+            if champion_team is not None:
+                champion_team = int(champion_team)
+                if champion_team not in range(1, 9):
+                    return False
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        with self._lock:
+            self.day = StableValue(day)
+            self.round_number = round_number
+            self.round_open = bool(session.get("roundOpen", False))
+            self.rounds = deepcopy(completed_rounds)
+            self.score_adjustments = score_adjustments
+            self.checkpoint_teams = checkpoint_teams
+            self.champion_team = champion_team
+            for team, saved in zip(self.teams, teams):
+                team.ts = StableValue(saved["totalTs"])
+                team.ks = StableValue(saved["totalKs"])
+                team.round_ts = StableValue(saved["roundTs"])
+                team.round_ks = StableValue(saved["roundKs"])
+                team.round_penalty = saved["penalty"]
+                team.carried_ts = saved["carriedTs"]
+                team.carried_ks = saved["carriedKs"]
+                team.alive = StableValue(saved["alive"])
+                team.knocked = StableValue(saved["knocked"])
+                team.respawning = StableValue(saved["respawning"])
+                team.escaped = StableValue(saved["escaped"])
+                team.status = saved["status"]
+                team.manual_status = saved["manualStatus"]
+                team.eliminated_at = saved["eliminatedAt"]
+                team.escaped_at = saved["escapedAt"]
+                team.respawn_grace_seconds = saved["respawnGraceSeconds"]
+            self.source = "restored"
+            self.revision += 1
+            self.updated_at = time.time()
+        return True
 
     def apply(
         self,
@@ -130,10 +267,14 @@ class ScoreState:
             for seen in observation.teams:
                 team = self.teams[seen.team - 1]
                 changed |= self._apply_team(team, seen)
-                if seen.respawning is not None and seen.respawning > 0:
-                    team.respawn_grace_seconds = 10.0
+                if seen.respawning is not None:
+                    team.respawn_grace_seconds = (
+                        10.0 if int(team.respawning.value) > 0 else 0.0
+                    )
                 elif team.respawn_grace_seconds > 0:
-                    team.respawn_grace_seconds = max(0.0, team.respawn_grace_seconds - sample_seconds)
+                    team.respawn_grace_seconds = max(
+                        0.0, team.respawn_grace_seconds - sample_seconds
+                    )
                 changed |= self._update_status(team, now)
             changed |= self._update_champion_locked()
 
@@ -142,7 +283,7 @@ class ScoreState:
             self.source = source
             self.resolution_ok = observation.resolution_ok
             if changed:
-                self.revision += 1
+                self._mark_changed_locked()
 
     def _apply_team(self, team: TeamState, seen: TeamObservation) -> bool:
         changed = False
@@ -158,7 +299,10 @@ class ScoreState:
                     )
                     team.ks = StableValue(team.carried_ks + float(team.round_ks.value))
                     changed = True
-        changed |= team.alive.observe(seen.alive)
+        changed |= team.alive.observe(
+            seen.alive,
+            confirmations=ELIMINATION_CONFIRMATIONS if seen.alive == 0 else 2,
+        )
         changed |= team.knocked.observe(seen.knocked)
         changed |= team.respawning.observe(seen.respawning)
         changed |= team.escaped.observe(seen.escaped, confirmations=ESCAPE_CONFIRMATIONS)
@@ -175,11 +319,17 @@ class ScoreState:
             team.status = "ESCAPE"
             if team.escaped_at is None:
                 team.escaped_at = now
-        elif team.eliminated_at is not None:
-            team.status = "ELIMINATED"
         elif alive > 0:
             team.status = "ACTIVE"
-        elif day == 1 or int(team.respawning.value) > 0 or team.respawn_grace_seconds > 0:
+            team.eliminated_at = None
+        elif team.eliminated_at is not None:
+            team.status = "ELIMINATED"
+        elif (
+            day == 1
+            or old == "BREAK"
+            or int(team.respawning.value) > 0
+            or team.respawn_grace_seconds > 0
+        ):
             team.status = "BREAK"
         else:
             team.status = "ELIMINATED"
@@ -212,16 +362,14 @@ class ScoreState:
                 self._update_status(team, time.time())
             self._update_champion_locked()
             self.source = source
-            self.revision += 1
-            self.updated_at = time.time()
+            self._mark_changed_locked()
 
     def begin_round(self) -> None:
         with self._lock:
             if self.round_open:
                 return
             self.round_open = True
-            self.revision += 1
-            self.updated_at = time.time()
+            self._mark_changed_locked()
 
     @staticmethod
     def _validated_score_changes(changes: list[dict]) -> list[dict]:
@@ -303,7 +451,7 @@ class ScoreState:
             team.escaped_at = team.escaped_at or now
             team.respawn_grace_seconds = 0.0
         team.status = status
-        team.manual_status = status
+        team.manual_status = None if status == "ACTIVE" else status
 
     @staticmethod
     def _apply_saved_status(saved: dict, status: str, now: float) -> None:
@@ -313,7 +461,7 @@ class ScoreState:
                 respawning=0,
                 escaped=False,
                 status=status,
-                manualStatus=status,
+                manualStatus=None,
                 eliminatedAt=None,
                 escapedAt=None,
             )
@@ -368,8 +516,7 @@ class ScoreState:
                 if change["status"] is not None:
                     self._apply_team_status(team, change["status"], time.time())
             self.score_adjustments.setdefault(self.round_number, []).append(previous)
-            self.revision += 1
-            self.updated_at = time.time()
+            self._mark_changed_locked()
 
     def reset(self) -> None:
         with self._lock:
@@ -425,8 +572,7 @@ class ScoreState:
                 team.eliminated_at = None
                 team.escaped_at = None
                 team.respawn_grace_seconds = 0.0
-            self.revision += 1
-            self.updated_at = time.time()
+            self._mark_changed_locked()
             return deepcopy(result)
 
     def undo_complete_round(self) -> dict:
@@ -443,6 +589,7 @@ class ScoreState:
 
             restored = self.rounds.pop()
             self.round_number = int(restored["round"])
+            self.score_adjustments.pop(self.round_number, None)
             restored_checkpoint_teams = restored.get("checkpointTeams")
             if self.tournament["checkpointEnabled"]:
                 self.checkpoint_teams = (
@@ -455,7 +602,6 @@ class ScoreState:
             self.round_open = True
             self.day = StableValue(1)
             for team in self.teams:
-                saved = restored["teams"][team.team - 1]
                 carried_ts = 0.0
                 carried_ks = 0.0
                 for completed in self.rounds:
@@ -464,24 +610,23 @@ class ScoreState:
                     carried_ks += float(completed_team["ks"])
                 team.carried_ts = carried_ts
                 team.carried_ks = carried_ks
-                team.round_ts = StableValue(float(saved["ts"]))
-                team.round_ks = StableValue(float(saved["ks"]))
-                team.round_penalty = float(saved.get("penalty", 0.0))
-                team.ts = StableValue(carried_ts + float(saved["ts"]) - team.round_penalty)
-                team.ks = StableValue(carried_ks + float(saved["ks"]))
-                team.alive = StableValue(int(saved.get("alive", 3)))
-                team.knocked = StableValue(int(saved.get("knocked", 0)))
-                team.respawning = StableValue(int(saved.get("respawning", 0)))
-                team.escaped = StableValue(bool(saved.get("escaped", False)))
-                team.status = str(saved.get("status", "ACTIVE"))
-                team.manual_status = saved.get("manualStatus")
-                team.eliminated_at = saved.get("eliminatedAt")
-                team.escaped_at = saved.get("escapedAt")
+                team.round_ts = StableValue(0.0)
+                team.round_ks = StableValue(0.0)
+                team.round_penalty = 0.0
+                team.ts = StableValue(carried_ts)
+                team.ks = StableValue(carried_ks)
+                team.alive = StableValue(3)
+                team.knocked = StableValue(0)
+                team.respawning = StableValue(0)
+                team.escaped = StableValue(False)
+                team.status = "ACTIVE"
+                team.manual_status = None
+                team.eliminated_at = None
+                team.escaped_at = None
                 team.respawn_grace_seconds = 0.0
             self.champion_team = self._completed_champion_locked()
             self._update_champion_locked()
-            self.revision += 1
-            self.updated_at = time.time()
+            self._mark_changed_locked()
             return deepcopy(restored)
 
     def adjust_round(
@@ -525,8 +670,7 @@ class ScoreState:
                 if change["status"] is not None:
                     self._apply_saved_status(saved, change["status"], time.time())
             self.score_adjustments.setdefault(round_number, []).append(previous)
-            self.revision += 1
-            self.updated_at = time.time()
+            self._mark_changed_locked()
             return deepcopy(result)
 
     def undo_score_adjustment(self, round_number: int) -> dict:
@@ -555,7 +699,9 @@ class ScoreState:
                     team.respawning = StableValue(saved["respawning"])
                     team.escaped = StableValue(saved["escaped"])
                     team.status = saved["status"]
-                    team.manual_status = saved["manualStatus"]
+                    team.manual_status = (
+                        None if saved["manualStatus"] == "ACTIVE" else saved["manualStatus"]
+                    )
                     team.eliminated_at = saved["eliminatedAt"]
                     team.escaped_at = saved["escapedAt"]
                     team.respawn_grace_seconds = saved["respawnGraceSeconds"]
@@ -574,11 +720,16 @@ class ScoreState:
                     team.carried_ks += delta_ks
                     team.ts = StableValue(float(team.ts.value) + delta_ts)
                     team.ks = StableValue(float(team.ks.value) + delta_ks)
-            self.revision += 1
-            self.updated_at = time.time()
+            self._mark_changed_locked()
             return {"round": round_number, "teams": deepcopy(previous)}
 
-    def set_tournament(self, tournament: dict, reset: bool = True) -> None:
+    def set_tournament(
+        self,
+        tournament: dict,
+        reset: bool = True,
+        session: dict | None = None,
+    ) -> None:
+        restoring_session = reset and isinstance(session, dict)
         with self._lock:
             checkpoint_was_enabled = self.tournament["checkpointEnabled"]
             self.tournament = {
@@ -590,7 +741,7 @@ class ScoreState:
             for index, name in enumerate(tournament["teams"]):
                 self.teams[index].name = name
             if reset:
-                self._reset_locked()
+                self._reset_locked(notify_change=not restoring_session)
             else:
                 if not self.tournament["checkpointEnabled"]:
                     self.checkpoint_teams = []
@@ -601,17 +752,20 @@ class ScoreState:
                     )
                     self.champion_team = self._completed_champion_locked()
                     self._update_champion_locked()
-                self.revision += 1
-                self.updated_at = time.time()
+                self._mark_changed_locked()
+
+        if restoring_session:
+            self.restore_session(session)
+            with self._lock:
+                self._mark_changed_locked()
 
     def set_team_names(self, team_names: list[str]) -> None:
         with self._lock:
             for index, name in enumerate(team_names):
                 self.teams[index].name = name
-            self.revision += 1
-            self.updated_at = time.time()
+            self._mark_changed_locked()
 
-    def _reset_locked(self) -> None:
+    def _reset_locked(self, notify_change: bool = True) -> None:
         self.day = StableValue(1)
         self.round_number = 1
         self.round_open = False
@@ -636,8 +790,11 @@ class ScoreState:
             team.eliminated_at = None
             team.escaped_at = None
             team.respawn_grace_seconds = 0.0
-        self.revision += 1
-        self.updated_at = time.time()
+        if notify_change:
+            self._mark_changed_locked()
+        else:
+            self.revision += 1
+            self.updated_at = time.time()
 
     def _checkpoint_teams_for_round_locked(self, round_number: int) -> list[int]:
         if not self.tournament["checkpointEnabled"] or round_number < 5:

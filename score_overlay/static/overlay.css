@@ -1,3 +1,4 @@
+/* Powered by Honyeong */
 @font-face {
   font-family: "YuhanKimberly";
   src: url("/fonts/YuhanKimberly-Medium.otf") format("opentype");
@@ -70,7 +71,7 @@ body { position: relative; pointer-events: none; cursor: default; }
 }
 header { display: flex; align-items: center; justify-content: center; min-height: 38px; border-bottom: 2px solid #000; }
 h1 { margin: 0 0 1px; font-size: var(--title-font-size); line-height: 1; font-weight: 900; letter-spacing: -.02em; text-align: center; text-wrap: balance; }
-.labels, .team-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) 31px 31px; align-items: center; }
+.labels, .team-row { display: grid; grid-template-columns: 19px minmax(0, 1fr) 31px 31px; align-items: center; }
 #rows { display: flex; flex-direction: column; }
 .labels { height: 16px; color: var(--muted); font-size: var(--label-font-size); font-weight: 700; letter-spacing: 0; text-align: right; }
 .labels span:nth-child(2) { text-align: left; }
@@ -79,7 +80,7 @@ h1 { margin: 0 0 1px; font-size: var(--title-font-size); line-height: 1; font-we
 .team-row > * { position: relative; z-index: 1; }
 .rank { display: flex; align-items: center; justify-content: center; width: var(--rank-size); height: var(--rank-size); padding: 0; border-radius: 3px; color: var(--rank-text); background: var(--rank); font-size: var(--rank-font-size); line-height: 1; font-weight: 900; font-variant-numeric: tabular-nums; text-align: center; }
 .team { min-width: 0; display: flex; align-items: center; gap: 2px; }
-.team strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--row-font-size); line-height: 1; font-weight: 900; }
+.team strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--row-font-size); line-height: 1.22; font-weight: 900; }
 .checkpoint-badge { display: none; flex: none; place-items: center; width: 17px; height: 12px; border-radius: 3px; background: var(--ink); color: var(--surface); font-size: 0; line-height: 1; font-weight: 900; transform: translateX(-1px); }
 .checkpoint-badge::after { content: "CP"; font-size: 8px; line-height: 1; }
 .team-row.checkpoint { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
@@ -92,6 +93,7 @@ h1 { margin: 0 0 1px; font-size: var(--title-font-size); line-height: 1; font-we
 .team-row.eliminated .checkpoint-badge { background: #777879; color: #ffffff; }
 .team-row.eliminated .rank { color: #a4a4a5; background: #353638; }
 .team-row.eliminated .score, .team-row.eliminated .score.ks { color: #6e6f70; }
+.team-row.elimination-flash { transition: none; }
 .team-row.elimination-flash::before, .team-row.elimination-flash::after { position: absolute; inset: 0; pointer-events: none; }
 .team-row.elimination-flash::before { z-index: 2; content: ""; background: var(--elimination); animation: elimination-wash 1.5s linear both; }
 .team-row.elimination-flash::after { z-index: 3; content: attr(data-terminal-label); display: grid; place-items: center; color: var(--elimination-text); font-family: "BebasNeue", sans-serif; font-size: 19px; line-height: 1; font-weight: 400; letter-spacing: .08em; transform: translateY(var(--elimination-text-nudge)); animation: elimination-label 1.5s linear both; }

@@ -1,4 +1,4 @@
-# 서드파티 폰트 안내
+# 서드파티 안내
 
 이 프로젝트에는 아래 폰트가 포함되어 있습니다. 프로젝트의 MIT License는 폰트 파일에 적용되지 않으며 각 폰트의 배포 조건을 따릅니다.
 
@@ -21,3 +21,4 @@
 - 사용 파일: `korean_PP-OCRv5_rec_mobile.onnx`
 - 원본 프로젝트: <https://github.com/PaddlePaddle/PaddleOCR>
 - Apache License 2.0
+- 라이선스 전문: [PaddleOCR-Apache-2.0.txt](licenses/PaddleOCR-Apache-2.0.txt)

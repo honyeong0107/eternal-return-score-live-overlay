@@ -1,3 +1,18 @@
+/* Powered by Honyeong */
+@font-face {
+  font-family: "YuhanKimberly";
+  src: url("/fonts/YuhanKimberly-Medium.otf") format("opentype");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "YuhanKimberly";
+  src: url("/fonts/YuhanKimberly-Bold.otf") format("opentype");
+  font-style: normal;
+  font-weight: 700 900;
+  font-display: swap;
+}
 :root {
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Malgun Gothic", sans-serif;
@@ -88,6 +103,38 @@ legend { padding: 0 10px 0 0; }
 .preset-add[aria-expanded="true"], .preset-add[data-custom="true"] { border-color: #1d1d1f; color: var(--ink); }
 .theme-details { margin: 14px 0 0; padding-top: 14px; border-top: 1px solid #e5e5e7; }
 .theme-details[hidden] { display: none; }
+.theme-preview-block { margin-bottom: 12px; }
+.theme-preview-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.theme-preview-heading strong { color: #424245; font-size: .82rem; font-weight: 600; }
+.theme-preview-heading span { color: var(--muted); font-size: .72rem; }
+.theme-preview-stage {
+  --preview-accent: #a8d8f0;
+  --preview-ink: #111c22;
+  --preview-muted: #52656f;
+  --preview-ks: #3e718a;
+  --preview-rank: #a8d8f0;
+  --preview-rank-text: #0e1a20;
+  --preview-elimination: #5b7481;
+  min-height: 168px;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border-radius: 12px;
+  background: #161617;
+}
+.theme-preview-board { width: min(100%, 286px); padding: 6px 8px 8px; overflow: hidden; border: 2px solid #000; border-radius: 8px; background: #fff; color: var(--preview-ink); font-family: "YuhanKimberly", "Malgun Gothic", sans-serif; }
+.theme-preview-title { min-height: 41px; display: grid; place-items: center; border-bottom: 2px solid #000; font-size: 25px; line-height: 1; font-weight: 900; letter-spacing: -.02em; text-align: center; }
+.theme-preview-labels, .theme-preview-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 42px 42px; align-items: center; }
+.theme-preview-labels { height: 20px; color: var(--preview-muted); font-size: 10px; line-height: 1; font-weight: 700; text-align: center; }
+.theme-preview-labels span:nth-child(2) { text-align: left; }
+.theme-preview-row { position: relative; min-height: 31px; border-top: 1px solid #000; font-size: 14px; font-weight: 900; }
+.theme-preview-row.checkpoint { background: color-mix(in srgb, var(--preview-accent) 18%, #fff); }
+.theme-preview-row > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-preview-row > b { text-align: center; font-weight: 900; }
+.theme-preview-rank { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 3px; background: var(--preview-rank); color: var(--preview-rank-text); font-size: 12px; line-height: 1; }
+.theme-preview-ks { color: var(--preview-ks); }
+.theme-preview-row i { display: inline-grid; place-items: center; min-width: 19px; height: 14px; border-radius: 3px; background: var(--preview-ink); color: #fff; font-size: 8px; line-height: 1; font-style: normal; vertical-align: 1px; }
+.theme-preview-effect { height: 31px; display: grid; place-items: center; position: relative; background: var(--preview-elimination); color: #fff; font-size: 15px; line-height: 1; font-weight: 700; letter-spacing: .08em; }
 .fixed-colors { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .fixed-colors span { padding: 5px 8px; border-radius: 7px; background: var(--surface-muted); color: var(--muted); font-size: .75rem; }
 .fixed-colors b { margin-left: 3px; color: #424245; font-family: "SF Mono", Consolas, monospace; font-weight: 500; }
@@ -142,5 +189,7 @@ pre { max-height: 320px; overflow: auto; padding: 12px; border-radius: 8px; back
   .round-controls { align-items: stretch; flex-direction: column; }
   .round-controls select, .round-controls .button { width: 100%; }
   .round-score-header, .round-score-row { padding-inline: 2px; }
+  .theme-preview-stage { min-height: 150px; padding: 14px; }
+  .theme-preview-title { font-size: 22px; }
 }
 @media (prefers-reduced-motion: reduce) { .button, .toast { transition: none; } }

@@ -1,3 +1,4 @@
+# Powered by Honyeong
 from __future__ import annotations
 
 import json
@@ -115,15 +116,51 @@ class OverlayHandler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "tracking": True, "state": self.server.state.snapshot()})
                     return
                 active = self.server.tournaments.active()
-                names, observation = self.server.live_score.parse(active["teams"])
+                state_before_start = self.server.state.snapshot()
+                current_names = [
+                    team["name"]
+                    for team in sorted(
+                        state_before_start["teams"],
+                        key=lambda team: int(team["team"]),
+                    )
+                ]
+                match_started = (
+                    state_before_start["roundOpen"]
+                    or bool(state_before_start["completedRounds"])
+                )
+                configured_names = [
+                    name if configured else ""
+                    for name, configured in zip(
+                        active["teams"],
+                        active["teamNamesConfigured"],
+                    )
+                ]
+                recognize_names = not match_started and any(
+                    not configured
+                    for configured in active["teamNamesConfigured"]
+                )
+                known_names = current_names if match_started else configured_names
+                recognized_names, observation = self.server.live_score.parse(
+                    known_names,
+                    recognize_names=recognize_names,
+                )
                 readable_scores = sum(
                     team.ts is not None and team.ks is not None
                     for team in observation.teams
                 )
                 if observation.day is None or readable_scores < 6:
                     raise RuntimeError("16:9 관전자 화면에서 팀 점수를 찾지 못했습니다.")
-                active = self.server.tournaments.update_active_teams(names)
-                self.server.state.set_tournament(active, reset=False)
+                if match_started:
+                    names = current_names
+                else:
+                    names = [
+                        configured or recognized
+                        for configured, recognized in zip(
+                            configured_names,
+                            recognized_names,
+                        )
+                    ]
+                    self.server.state.set_team_names(names)
                 self.server.state.begin_round()
                 self.server.state.apply_live_snapshot(observation, self.server.state.source)
                 self.server.live_score.start()
@@ -183,21 +220,40 @@ class OverlayHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 self.server.live_score.stop()
                 profile = self.server.tournaments.select(str(payload.get("id", "")))
-                self.server.state.set_tournament(profile, reset=True)
+                self.server.state.set_tournament(
+                    profile,
+                    reset=True,
+                    session=self.server.tournaments.load_session(),
+                )
                 self._json({"ok": True, "profile": profile})
                 return
             if path == "/api/tournaments/save":
                 payload = self._read_json()
                 previous_id = self.server.tournaments.active()["id"]
                 profile = self.server.tournaments.save(payload)
-                self.server.state.set_tournament(profile, reset=profile["id"] != previous_id)
+                switched_tournament = profile["id"] != previous_id
+                if switched_tournament:
+                    self.server.live_score.stop()
+                self.server.state.set_tournament(
+                    profile,
+                    reset=switched_tournament,
+                    session=(
+                        self.server.tournaments.load_session()
+                        if switched_tournament
+                        else None
+                    ),
+                )
                 self._json({"ok": True, "profile": profile})
                 return
             if path == "/api/tournaments/delete":
                 payload = self._read_json()
                 self.server.live_score.stop()
                 profile = self.server.tournaments.delete(str(payload.get("id", "")))
-                self.server.state.set_tournament(profile, reset=True)
+                self.server.state.set_tournament(
+                    profile,
+                    reset=True,
+                    session=self.server.tournaments.load_session(),
+                )
                 self._json(
                     {
                         "ok": True,

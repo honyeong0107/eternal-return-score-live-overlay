@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Powered by Honyeong -->
 <html lang="ko">
 <head>
   <meta charset="utf-8">
@@ -156,7 +157,7 @@
         row.classList.toggle('active', statusName === 'active');
         row.classList.toggle('checkpoint', Boolean(team.checkpoint));
         row.classList.toggle('eliminated', terminal);
-        row.dataset.terminalLabel = team.status === 'ESCAPE' ? 'ESCAPE' : 'ELIMINATED';
+        row.dataset.terminalLabel = team.status === 'ESCAPE' ? 'ESCAPE' : 'TERMINATED';
         if (terminal) {
           const wasEliminated = eliminatedTeams.has(team.team);
           if (initialized && !wasEliminated) pendingEliminations.add(team.team);

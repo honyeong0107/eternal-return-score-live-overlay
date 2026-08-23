@@ -5,7 +5,6 @@ release/
 __pycache__/
 *.pyc
 .pytest_cache/
-tests/
 .playwright-cli/
 debug-frame.jpg
 output/
@@ -14,3 +13,12 @@ video-inspection*/
 _workspace/
 *.mp4
 config.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets*.json

@@ -1,3 +1,4 @@
+# Powered by Honyeong
 from __future__ import annotations
 
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 
 
 DEFAULT_TEAMS = [""] * 8
+DEFAULT_TEAM_NAMES_CONFIGURED = [False] * 8
 DEFAULT_THEME = {
     "title": "LEADERBOARD",
     "accent": "#a8d8f0",
@@ -26,6 +28,7 @@ DEFAULT_PROFILE = {
     "name": "기본 대회",
     "checkpointEnabled": False,
     "teams": DEFAULT_TEAMS,
+    "teamNamesConfigured": DEFAULT_TEAM_NAMES_CONFIGURED,
     "theme": DEFAULT_THEME,
 }
 COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -42,14 +45,26 @@ class TournamentStore:
     def _load(self) -> dict:
         raw_text = self._read_text()
         if raw_text is None:
-            return {"activeTournament": "default", "tournaments": [deepcopy(DEFAULT_PROFILE)]}
+            return {
+                "activeTournament": "default",
+                "tournaments": [deepcopy(DEFAULT_PROFILE)],
+            }
 
         raw = json.loads(raw_text)
         if "tournaments" not in raw:
             teams = raw.get("teams", DEFAULT_TEAMS)
             profile = deepcopy(DEFAULT_PROFILE)
             profile["teams"] = teams
-            return {"activeTournament": "default", "tournaments": [self._validate(profile)]}
+            if "teamNamesConfigured" in raw:
+                profile["teamNamesConfigured"] = raw["teamNamesConfigured"]
+            else:
+                profile.pop("teamNamesConfigured", None)
+            profile = self._validate(profile)
+            data = {"activeTournament": "default", "tournaments": [profile]}
+            sessions = self._load_sessions(raw, {profile["id"]})
+            if sessions:
+                data["scoreSessions"] = sessions
+            return data
 
         profiles = [self._validate(profile) for profile in raw.get("tournaments", [])]
         if not profiles:
@@ -58,7 +73,31 @@ class TournamentStore:
         active = raw.get("activeTournament")
         if active not in ids:
             active = profiles[0]["id"]
-        return {"activeTournament": active, "tournaments": profiles}
+        data = {"activeTournament": active, "tournaments": profiles}
+        sessions = self._load_sessions(raw, ids)
+        if sessions:
+            data["scoreSessions"] = sessions
+        return data
+
+    @staticmethod
+    def _load_sessions(raw: dict, tournament_ids: set[str]) -> dict[str, dict]:
+        sessions = {}
+        raw_sessions = raw.get("scoreSessions")
+        if isinstance(raw_sessions, dict):
+            for tournament_id, session in raw_sessions.items():
+                if (
+                    tournament_id in tournament_ids
+                    and isinstance(session, dict)
+                    and session.get("tournamentId") == tournament_id
+                ):
+                    sessions[tournament_id] = deepcopy(session)
+
+        legacy_session = raw.get("scoreSession")
+        if isinstance(legacy_session, dict):
+            tournament_id = legacy_session.get("tournamentId")
+            if tournament_id in tournament_ids and tournament_id not in sessions:
+                sessions[tournament_id] = deepcopy(legacy_session)
+        return sessions
 
     @staticmethod
     def _slug(value: str) -> str:
@@ -80,9 +119,24 @@ class TournamentStore:
         if not isinstance(teams, list) or len(teams) != 8:
             raise ValueError("팀 이름은 정확히 8개가 필요합니다.")
         clean_teams = [str(team).strip() for team in teams]
-        allow_empty_teams = profile_id == "default"
-        if any(len(team) > 40 or (not team and not allow_empty_teams) for team in clean_teams):
-            raise ValueError("각 팀 이름은 1~40자로 입력하세요.")
+        raw_configured = profile.get("teamNamesConfigured")
+        if isinstance(raw_configured, list) and len(raw_configured) == 8:
+            team_names_configured = [bool(configured) for configured in raw_configured]
+        else:
+            generated_labels = [f"TEAM {team}" for team in range(1, 9)]
+            team_names_configured = [
+                bool(name) and name.casefold() != generated.casefold()
+                for name, generated in zip(clean_teams, generated_labels)
+            ]
+        if any(len(team) > 40 for team in clean_teams) or any(
+            configured and not name
+            for name, configured in zip(clean_teams, team_names_configured)
+        ):
+            raise ValueError("각 팀 이름은 40자 이내로 입력하세요.")
+        clean_teams = [
+            name if configured else ""
+            for name, configured in zip(clean_teams, team_names_configured)
+        ]
 
         theme = profile.get("theme") or {}
         title = str(theme.get("title", DEFAULT_THEME["title"])).strip()
@@ -111,12 +165,32 @@ class TournamentStore:
             "name": name,
             "checkpointEnabled": bool(profile.get("checkpointEnabled", False)),
             "teams": clean_teams,
+            "teamNamesConfigured": team_names_configured,
             "theme": {"title": title, **colors},
         }
 
     def snapshot(self) -> dict:
         with self._lock:
-            return deepcopy(self._data)
+            return {
+                "activeTournament": self._data["activeTournament"],
+                "tournaments": deepcopy(self._data["tournaments"]),
+            }
+
+    def load_session(self) -> dict | None:
+        with self._lock:
+            sessions = self._data.get("scoreSessions", {})
+            session = sessions.get(self._data["activeTournament"])
+            if not isinstance(session, dict):
+                return None
+            return deepcopy(session)
+
+    def save_session(self, session: dict) -> None:
+        with self._lock:
+            if session.get("tournamentId") != self._data["activeTournament"]:
+                raise ValueError("활성 대회와 라운드 기록이 일치하지 않습니다.")
+            sessions = self._data.setdefault("scoreSessions", {})
+            sessions[self._data["activeTournament"]] = deepcopy(session)
+            self._save_locked()
 
     def active(self) -> dict:
         with self._lock:
@@ -171,26 +245,15 @@ class TournamentStore:
                 self._save_locked()
                 return deepcopy(DEFAULT_PROFILE)
             self._data["tournaments"].pop(index)
+            sessions = self._data.get("scoreSessions")
+            if isinstance(sessions, dict):
+                sessions.pop(profile_id, None)
             if self._data["activeTournament"] == profile_id:
                 self._data["activeTournament"] = self._data["tournaments"][0]["id"]
             active_id = self._data["activeTournament"]
             active = next(profile for profile in self._data["tournaments"] if profile["id"] == active_id)
             self._save_locked()
             return deepcopy(active)
-
-    def update_active_teams(self, team_names: list[str]) -> dict:
-        with self._lock:
-            active_id = self._data["activeTournament"]
-            for index, profile in enumerate(self._data["tournaments"]):
-                if profile["id"] != active_id:
-                    continue
-                updated = deepcopy(profile)
-                updated["teams"] = team_names
-                updated = self._validate(updated)
-                self._data["tournaments"][index] = updated
-                self._save_locked()
-                return deepcopy(updated)
-        raise ValueError("활성 대회를 찾을 수 없습니다.")
 
     def _save_locked(self) -> None:
         payload = json.dumps(self._data, ensure_ascii=False, indent=2) + "\n"

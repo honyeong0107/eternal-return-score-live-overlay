@@ -1,5 +1,6 @@
 ﻿$ErrorActionPreference = "Stop"
 $workspaceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Powered by Honyeong
 $venvDir = Join-Path $workspaceDir ".venv"
 $pythonExe = Join-Path $venvDir "Scripts\python.exe"
 $requirementsPath = Join-Path $workspaceDir "requirements.txt"
