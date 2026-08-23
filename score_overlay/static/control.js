@@ -1,3 +1,4 @@
+// Powered by Honyeong
 const elements = {
   connection: document.getElementById('connection'),
   live: document.getElementById('live-score'),
@@ -17,6 +18,8 @@ const elements = {
   presetOptions: document.getElementById('preset-options'),
   customTheme: document.getElementById('custom-theme'),
   themeDetails: document.getElementById('theme-details'),
+  themePreview: document.getElementById('theme-preview'),
+  themePreviewTitle: document.getElementById('theme-preview-title'),
   accent: document.getElementById('accent-color'),
   text: document.getElementById('text-color'),
   muted: document.getElementById('muted-color'),
@@ -66,7 +69,7 @@ let roundsKey = '';
 for (let index = 1; index <= 8; index += 1) {
   const label = document.createElement('label');
   label.className = 'team-field';
-  label.innerHTML = `<b>${String(index).padStart(2, '0')}</b><input maxlength="40" aria-label="${index}번 팀 이름" required>`;
+  label.innerHTML = `<b>${String(index).padStart(2, '0')}</b><input maxlength="40" placeholder="TEAM ${index}" aria-label="${index}번 팀 이름">`;
   elements.teamFields.append(label);
 }
 
@@ -97,10 +100,41 @@ function fitPreview() {
 
 function setThemeValues(theme) {
   THEME_FIELDS.forEach((key) => { elements[key].value = theme[key]; });
+  updateThemePreview();
 }
 
 function currentThemeValues() {
   return Object.fromEntries(THEME_FIELDS.map((key) => [key, elements[key].value.toLowerCase()]));
+}
+
+function eliminationFillColor(hex) {
+  const source = hex.replace('#', '').match(/.{2}/g)?.map((value) => Number.parseInt(value, 16));
+  if (!source) return '#5b7481';
+  const luminance = (scale) => {
+    const [red, green, blue] = source.map((value) => value * scale / 255).map((value) => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+    return .2126 * red + .7152 * green + .0722 * blue;
+  };
+  if (luminance(1) <= .16) return hex;
+  let lower = 0;
+  let upper = 1;
+  for (let index = 0; index < 12; index += 1) {
+    const middle = (lower + upper) / 2;
+    if (luminance(middle) > .16) upper = middle;
+    else lower = middle;
+  }
+  return `#${source.map((value) => Math.round(value * lower).toString(16).padStart(2, '0')).join('')}`;
+}
+
+function updateThemePreview() {
+  const theme = currentThemeValues();
+  elements.themePreviewTitle.textContent = elements.title.value.trim() || 'LEADERBOARD';
+  elements.themePreview.style.setProperty('--preview-accent', theme.accent);
+  elements.themePreview.style.setProperty('--preview-ink', theme.text);
+  elements.themePreview.style.setProperty('--preview-muted', theme.muted);
+  elements.themePreview.style.setProperty('--preview-ks', theme.ks);
+  elements.themePreview.style.setProperty('--preview-rank', theme.rank);
+  elements.themePreview.style.setProperty('--preview-rank-text', theme.rankText);
+  elements.themePreview.style.setProperty('--preview-elimination', eliminationFillColor(theme.elimination));
 }
 
 function updatePresetSelection() {
@@ -133,7 +167,10 @@ function fillProfile(profile) {
   elements.themeDetails.hidden = true;
   elements.customTheme.setAttribute('aria-expanded', 'false');
   updatePresetSelection();
-  teamInputs.forEach((input, index) => { input.value = profile?.teams?.[index] || `TEAM ${index + 1}`; });
+  teamInputs.forEach((input, index) => {
+    const configured = Boolean(profile?.teamNamesConfigured?.[index]);
+    input.value = configured ? profile.teams[index] : '';
+  });
   elements.select.value = activeId;
 }
 
@@ -214,13 +251,13 @@ function renderRoundEditor(state) {
   header.innerHTML = '<span>팀</span><span>상태</span><span>KS</span><span>TS</span><span>패널티</span>';
   table.append(header);
 
-  const scoreRows = current ? state.teams.map((team) => ({
+  const scoreRows = (current ? state.teams.map((team) => ({
     team: team.team,
     ts: team.roundTs,
     ks: team.roundKs,
     penalty: team.roundPenalty,
     status: team.status,
-  })) : completed.teams;
+  })) : completed.teams).slice().sort((left, right) => left.team - right.team);
   scoreRows.forEach((team) => {
     const row = document.createElement('div');
     row.className = 'round-score-row';
@@ -298,6 +335,7 @@ function renderRoundEditor(state) {
 function renderRounds(state) {
   const previousTournamentId = lastState?.tournament?.id;
   const tournamentChanged = previousTournamentId !== state.tournament.id;
+  const liveScoreStarted = !lastState?.tracking && state.tracking;
   lastState = state;
   elements.roundCurrent.textContent = `${state.round}라운드`;
   elements.undoRound.disabled = isTracking || !state.completedRounds.length || (state.roundOpen && state.teams.some((team) => (
@@ -310,6 +348,7 @@ function renderRounds(state) {
     tournament: state.tournament.id,
     round: state.round,
     roundOpen: state.roundOpen,
+    tracking: state.tracking,
     completed: state.completedRounds,
     scoreUndoRounds: state.scoreUndoRounds,
     current: state.teams.map((team) => [
@@ -347,7 +386,9 @@ function renderRounds(state) {
   elements.roundSelect.replaceChildren(...options);
   elements.roundSelect.disabled = options.length === 1 && !options[0].value;
   const available = options.some((option) => option.value === previous);
-  elements.roundSelect.value = available
+  elements.roundSelect.value = liveScoreStarted && state.roundOpen
+    ? `current-${state.round}`
+    : available
     ? previous
     : (state.roundOpen
       ? `current-${state.round}`
@@ -417,7 +458,13 @@ elements.live.addEventListener('click', async () => {
     : `${current}라운드 점수 읽는 중…`;
   try {
     const result = await api(stopping ? '/api/rounds/complete' : '/api/live-score/start', {method: 'POST'});
-    if (!stopping) await loadTournaments();
+    if (!stopping) {
+      await loadTournaments();
+      teamInputs.forEach((input, index) => {
+        const recognized = String(result.teams[index] || '').trim();
+        if (recognized) input.value = recognized;
+      });
+    }
     await loadState();
     notify(stopping
       ? `${current}라운드 라이브 스코어를 종료하고 점수를 확정했습니다.`
@@ -555,9 +602,14 @@ elements.customTheme.addEventListener('click', () => {
   const willOpen = elements.themeDetails.hidden;
   elements.themeDetails.hidden = !willOpen;
   elements.customTheme.setAttribute('aria-expanded', String(willOpen));
+  if (willOpen) updateThemePreview();
 });
 
-THEME_FIELDS.forEach((key) => elements[key].addEventListener('input', updatePresetSelection));
+THEME_FIELDS.forEach((key) => elements[key].addEventListener('input', () => {
+  updatePresetSelection();
+  updateThemePreview();
+}));
+elements.title.addEventListener('input', updateThemePreview);
 
 elements.form.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -566,6 +618,7 @@ elements.form.addEventListener('submit', async (event) => {
     name: elements.name.value,
     checkpointEnabled: elements.checkpointEnabled.checked,
     teams: teamInputs.map((input) => input.value),
+    teamNamesConfigured: teamInputs.map((input) => Boolean(input.value.trim())),
     theme: {
       title: elements.title.value,
       accent: elements.accent.value,

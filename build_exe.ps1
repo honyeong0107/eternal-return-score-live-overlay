@@ -1,3 +1,4 @@
+# Powered by Honyeong
 $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildVenv = Join-Path $projectDir ".build-venv"

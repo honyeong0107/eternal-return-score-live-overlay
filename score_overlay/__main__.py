@@ -1,3 +1,4 @@
+# Powered by Honyeong
 from __future__ import annotations
 
 import argparse
@@ -104,6 +105,8 @@ def main() -> int:
     args = parse_args()
     tournaments = TournamentStore(args.config)
     state = ScoreState(tournaments.active())
+    state.restore_session(tournaments.load_session())
+    state.set_change_callback(tournaments.save_session)
     live_score = LiveScoreCapture()
     capture_source = WindowCaptureSource(args.fps)
     if args.window.casefold() not in {"", "none", "monitor"}:

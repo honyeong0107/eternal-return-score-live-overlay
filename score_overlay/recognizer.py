@@ -1,3 +1,4 @@
+# Powered by Honyeong
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -94,10 +95,38 @@ class HudRecognizer:
         hud_y_offset = 0
         valid_team_count = -1
         for score_lines in SCORE_LINE_LAYOUTS:
-            candidate = tuple(
+            candidate = [
                 self._read_team(frame, index, start, score_lines)
                 for index, start in enumerate(TEAM_STARTS, 1)
+            ]
+            missing = [
+                index
+                for index, team in enumerate(candidate)
+                if team.ts is None or team.ks is None
+            ]
+            selected_readable = any(
+                team.selected and team.ts is not None and team.ks is not None
+                for team in candidate
             )
+            if selected_readable:
+                for index in missing:
+                    candidate[index] = self._read_status_only(
+                        frame,
+                        index + 1,
+                        TEAM_STARTS[index],
+                        score_lines[1],
+                        selected=False,
+                    )
+            elif len(missing) == 1:
+                index = missing[0]
+                candidate[index] = self._read_status_only(
+                    frame,
+                    index + 1,
+                    TEAM_STARTS[index],
+                    score_lines[0],
+                    selected=True,
+                )
+            candidate = tuple(candidate)
             candidate_count = sum(team.ts is not None and team.ks is not None for team in candidate)
             if candidate_count > valid_team_count:
                 teams = candidate
@@ -125,7 +154,7 @@ class HudRecognizer:
         score_lines: tuple[int, int] = SCORE_LINES,
     ) -> TeamObservation:
         best: Optional[tuple[float, float, int, int]] = None
-        x_candidates = (x0, x0 + 1) if x0 == 0 else (x0,)
+        x_candidates = (x0, x0 + 1, x0 + 2) if x0 == 0 else (x0,)
         for line in score_lines:
             for score_x0 in x_candidates:
                 parsed = self._read_score_line(
@@ -142,6 +171,50 @@ class HudRecognizer:
             return TeamObservation(team, None, None, None, None, None)
 
         ts, ks, line, x0 = best
+        alive, knocked, respawning, escaped, _ = self._read_team_status(frame, line, x0)
+        return TeamObservation(
+            team,
+            ts,
+            ks,
+            alive,
+            knocked,
+            respawning,
+            selected=line == score_lines[0],
+            escaped=escaped,
+        )
+
+    def _read_status_only(
+        self,
+        frame: np.ndarray,
+        team: int,
+        x0: int,
+        line: int,
+        selected: bool,
+    ) -> TeamObservation:
+        x_candidates = (x0, x0 + 1, x0 + 2) if x0 == 0 else (x0,)
+        alive, knocked, respawning, escaped, evidence = max(
+            (self._read_team_status(frame, line, status_x0) for status_x0 in x_candidates),
+            key=lambda item: item[4],
+        )
+        if evidence == 0:
+            return TeamObservation(team, None, None, None, None, None)
+        return TeamObservation(
+            team,
+            None,
+            None,
+            alive,
+            knocked,
+            respawning,
+            selected=selected,
+            escaped=escaped,
+        )
+
+    def _read_team_status(
+        self,
+        frame: np.ndarray,
+        line: int,
+        x0: int,
+    ) -> tuple[int, int, int, bool, int]:
         glyph_y = line + 7
         skulls = 0
         knocked = 0
@@ -174,20 +247,27 @@ class HudRecognizer:
             if timer_visible:
                 skulls += 1
                 respawning += 1
-            elif int(magenta.sum()) >= 95:
-                skulls += 1
-            elif int(orange.sum()) >= 95:
-                knocked += 1
+            # Portrait/status colors can appear above the icon, while the selected
+            # accent forms a wide bar at its bottom. Real skulls can sit lower, but
+            # keep a compact silhouette instead of filling an entire row.
+            else:
+                middle_magenta = int(magenta[19:32].sum())
+                lower_magenta = magenta[26:39]
+                compact_lower_skull = (
+                    int(lower_magenta.sum()) >= 50
+                    and int(lower_magenta.sum(axis=1).max()) <= 18
+                )
+                if middle_magenta >= 35 or compact_lower_skull:
+                    skulls += 1
+                elif int(orange.sum()) >= 95:
+                    knocked += 1
 
-        return TeamObservation(
-            team,
-            ts,
-            ks,
+        return (
             3 - skulls,
             knocked,
             respawning,
-            selected=line == score_lines[0],
-            escaped=escape_icons >= MIN_ESCAPE_ICONS,
+            escape_icons >= MIN_ESCAPE_ICONS,
+            skulls + knocked + escape_icons,
         )
 
     @staticmethod
